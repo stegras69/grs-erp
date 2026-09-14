@@ -571,8 +571,9 @@
             const res = await fetch(APPS_SCRIPT_URL + '?action=get&key=' + encodeURIComponent(key), {
                 method: 'GET'
             });
-            if (!res.ok)
-                throw new Error('HTTP ' + res.status);
+            // Nota: Google Apps Script a volte riporta uno stato HTTP fuorviante (es. 404) anche
+            // quando il contenuto restituito è corretto — per questo NON controlliamo res.ok qui,
+            // ma solo se il corpo si può leggere come JSON valido e senza campo "error".
             const data = await res.json();
             if (data.error)
                 throw new Error(data.error);
@@ -586,8 +587,6 @@
             const res = await fetch(APPS_SCRIPT_URL + '?action=getPrefix&prefix=' + encodeURIComponent(prefix), {
                 method: 'GET'
             });
-            if (!res.ok)
-                throw new Error('HTTP ' + res.status);
             const data = await res.json();
             if (data.error)
                 throw new Error(data.error);
@@ -609,8 +608,6 @@
                     value
                 })
             });
-            if (!res.ok)
-                throw new Error('HTTP ' + res.status);
             const data = await res.json();
             if (data.error)
                 throw new Error(data.error);
@@ -626,8 +623,6 @@
                     key
                 })
             });
-            if (!res.ok)
-                throw new Error('HTTP ' + res.status);
             const data = await res.json();
             if (data.error)
                 throw new Error(data.error);
