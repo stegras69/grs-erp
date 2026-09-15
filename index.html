@@ -684,13 +684,21 @@
             _cacheCorso = {};
             return;
         }
-        try {
-            _cacheCorso = await remoteStorage.getPrefix('corso_' + currentCorso + '::');
-            storageOk = true;
-        } catch (e) {
-            _diagRegistraErrore('lettura-blocco', 'corso_' + currentCorso + '::*', e);
-            storageOk = false;
-            _cacheCorso = {}; // in caso di errore, i singoli getRaw faranno comunque da rete/fallback
+        const MAX_TENTATIVI = 3;
+        for (let tentativo = 1; tentativo <= MAX_TENTATIVI; tentativo++) {
+            try {
+                _cacheCorso = await remoteStorage.getPrefix('corso_' + currentCorso + '::');
+                storageOk = true;
+                return;
+            } catch (e) {
+                if (tentativo === MAX_TENTATIVI) {
+                    _diagRegistraErrore('lettura-blocco', 'corso_' + currentCorso + '::*', e);
+                    storageOk = false;
+                    _cacheCorso = {}; // in caso di errore, i singoli getRaw faranno comunque da rete/fallback
+                } else {
+                    await attesa(250 * tentativo + Math.random() * 150);
+                }
+            }
         }
     }
 
@@ -805,18 +813,26 @@
             const v = _cacheCorso[storageKey];
             return v !== undefined ? JSON.parse(v) : [];
         }
-        try {
-            if (!STORAGE_CONFIGURATO)
-                throw new Error('URL Apps Script non configurato nel codice');
-            const res = await remoteStorage.get(storageKey);
-            storageOk = true;
-            return res ? JSON.parse(res.value) : [];
-        } catch (e) {
-            _diagLettureFallite++;
-            _diagRegistraErrore('lettura', storageKey, e);
-            storageOk = false;
-            return _localFallback[storageKey] || [];
+        const MAX_TENTATIVI = 3;
+        let ultimoErrore = null;
+        for (let tentativo = 1; tentativo <= MAX_TENTATIVI; tentativo++) {
+            try {
+                if (!STORAGE_CONFIGURATO)
+                    throw new Error('URL Apps Script non configurato nel codice');
+                const res = await remoteStorage.get(storageKey);
+                storageOk = true;
+                return res ? JSON.parse(res.value) : [];
+            } catch (e) {
+                ultimoErrore = e;
+                if (tentativo < MAX_TENTATIVI)
+                    await attesa(250 * tentativo + Math.random() * 150);
+            }
         }
+        // Tutti i tentativi falliti: registriamo l'errore e usiamo il fallback locale.
+        _diagLettureFallite++;
+        _diagRegistraErrore('lettura', storageKey, ultimoErrore);
+        storageOk = false;
+        return _localFallback[storageKey] || [];
     }
     async function setRaw(storageKey, arr) {
         _localFallback[storageKey] = arr;
@@ -1749,7 +1765,7 @@
                     <strong style="font-size:11px;">Log errori salvato su QUESTO dispositivo (sopravvive ai refresh)</strong>
                     ${logPersistenteRecenti.length === 0 ? '<p style="font-size:10.5px; color:#8a8a80; margin:4px 0 0 0;">Nessun errore mai registrato su questo dispositivo.</p>' :
         `<div style="max-height:140px; overflow-y:auto; margin-top:4px;">
-                        ${logPersistenteRecenti.map(v => `<p style="font-size:9.5px; margin:2px 0; color:#a83232;">[${new Date(v.ts).toLocaleString()}] ${v.tipo} chiave="${v.key}" shared=${v.shared} — ${v.msg}</p>`).join('')}
+                        ${logPersistenteRecenti.map(v => `<p style="font-size:9.5px; margin:2px 0; color:#a83232;">[${new Date(v.ts).toLocaleString()}] ${v.tipo} chiave="${v.key}" — ${v.msg}</p>`).join('')}
                       </div>`}
                     <p style="font-size:10.5px; margin-top:6px;"><span id="admin-diag-copia-persistente" class="print-btn" style="cursor:pointer;">📋 Copia log dispositivo (ultimi ${logPersistenteRecenti.length})</span></p>
                   </div>
@@ -1769,7 +1785,7 @@
         const diagCopiaBtn = document.getElementById('admin-diag-copia');
         if (diagCopiaBtn)
             diagCopiaBtn.addEventListener('click', async () => {
-                const testo = _diagLogErrori.map(v => `[${new Date(v.ts).toLocaleString()}] ${v.tipo} chiave="${v.key}" shared=${v.shared} — ${v.msg}`).join('\n') || '(nessun errore registrato)';
+                const testo = _diagLogErrori.map(v => `[${new Date(v.ts).toLocaleString()}] ${v.tipo} chiave="${v.key}" — ${v.msg}`).join('\n') || '(nessun errore registrato)';
                 try {
                     await navigator.clipboard.writeText(testo);
                     adminMsg = 'Log copiato negli appunti.';
@@ -1782,7 +1798,7 @@
         const diagCopiaPersistBtn = document.getElementById('admin-diag-copia-persistente');
         if (diagCopiaPersistBtn)
             diagCopiaPersistBtn.addEventListener('click', async () => {
-                const testo = logPersistenteRecenti.map(v => `[${new Date(v.ts).toLocaleString()}] ${v.tipo} chiave="${v.key}" shared=${v.shared} — ${v.msg}`).join('\n') || '(nessun errore registrato su questo dispositivo)';
+                const testo = logPersistenteRecenti.map(v => `[${new Date(v.ts).toLocaleString()}] ${v.tipo} chiave="${v.key}" — ${v.msg}`).join('\n') || '(nessun errore registrato su questo dispositivo)';
                 try {
                     await navigator.clipboard.writeText(testo);
                     adminMsg = 'Log dispositivo copiato negli appunti.';
