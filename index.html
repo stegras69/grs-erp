@@ -568,8 +568,12 @@
 
     const remoteStorage = {
         async get(key) {
-            const res = await fetch(APPS_SCRIPT_URL + '?action=get&key=' + encodeURIComponent(key), {
-                method: 'GET'
+            // "&_=" con timestamp: impedisce al browser di servire una risposta vecchia
+            // dalla cache per questo stesso indirizzo (successo con letture subito dopo una scrittura).
+            const res = await fetch(APPS_SCRIPT_URL + '?action=get&key=' + encodeURIComponent(key) + '&_=' + Date.now(),
+            {
+                method: 'GET',
+                cache: 'no-store'
             });
             // Nota: Google Apps Script a volte riporta uno stato HTTP fuorviante (es. 404) anche
             // quando il contenuto restituito è corretto — per questo NON controlliamo res.ok qui,
@@ -584,8 +588,10 @@
         // Legge in UN SOLO viaggio di rete tutte le chiavi che iniziano con "prefix".
         // Ritorna una mappa { chiave: valore }. Usato per caricare tutto un corso in un colpo solo.
         async getPrefix(prefix) {
-            const res = await fetch(APPS_SCRIPT_URL + '?action=getPrefix&prefix=' + encodeURIComponent(prefix), {
-                method: 'GET'
+            const res = await fetch(APPS_SCRIPT_URL + '?action=getPrefix&prefix=' + encodeURIComponent(prefix) + '&_=' + Date.now(),
+            {
+                method: 'GET',
+                cache: 'no-store'
             });
             const data = await res.json();
             if (data.error)
