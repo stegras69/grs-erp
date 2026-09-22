@@ -554,124 +554,67 @@
 
     <script>
     // ============ STORAGE HELPERS ============
-    // Backend: Google Apps Script + Google Sheet (sostituisce lo storage di Claude,
-    // che richiedeva un piano a pagamento per funzionare — questo funziona per chiunque,
-    // gratis, con qualunque browser, dentro o fuori claude.ai).
+    // Backend: Firebase Realtime Database (sostituisce Google Sheets/Apps Script, troppo lento
+    // per un uso con più corsisti insieme). Stesso account Google, gratuito per questo volume.
     //
-    // >>> IMPORTANTE: incolla qui sotto l'URL del tuo Web App di Google Apps Script <<<
-    const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxBhS2MyaZC3PKAgdKRU8yukes3woz2FZMb4etXup6S1_re8BtvKOcxKfRGceu132ZYsQ/exec';
-    const STORAGE_CONFIGURATO = !APPS_SCRIPT_URL.startsWith('INSERISCI_QUI');
+    // >>> URL del Realtime Database <<<
+    const FIREBASE_URL = 'https://grs-erp-e023d-default-rtdb.firebaseio.com';
+    const STORAGE_CONFIGURATO = !FIREBASE_URL.startsWith('INSERISCI_QUI');
 
     let storageOk = true; // true = backend condiviso raggiungibile, false = fallback locale (solo in memoria, non condiviso)
     const _localFallback = {};
     let currentCorso = null;
 
+    // Tutti i dati vivono sotto il nodo "storage/" del database, con la stessa chiave piatta
+    // usata prima (es. "corso_X::materiali::u::mario"). I due punti ":" sono ammessi nei percorsi
+    // Firebase, quindi non serve altra codifica oltre a quella standard dell'URL.
+    function _firebasePath(key) {
+        return FIREBASE_URL + '/storage/' + encodeURIComponent(key) + '.json';
+    }
+
     const remoteStorage = {
         async get(key) {
-            // "&_=" con timestamp: impedisce al browser di servire una risposta vecchia
-            // dalla cache per questo stesso indirizzo (successo con letture subito dopo una scrittura).
-            const res = await fetch(APPS_SCRIPT_URL + '?action=get&key=' + encodeURIComponent(key) + '&_=' + Date.now(),
-            {
-                method: 'GET',
+            // "&_=" con timestamp: impedisce al browser di servire una risposta vecchia dalla cache.
+            const res = await fetch(_firebasePath(key) + '?_=' + Date.now(), {
                 cache: 'no-store'
             });
-            // Nota: Google Apps Script a volte riporta uno stato HTTP fuorviante (es. 404) anche
-            // quando il contenuto restituito è corretto — per questo NON controlliamo res.ok qui,
-            // ma solo se il corpo si può leggere come JSON valido e senza campo "error".
-            const data = await res.json();
-            if (data.error)
-                throw new Error(data.error);
-            return data.found ? {
-                value: data.value
-            } : null;
+            const dato = await res.json(); // null se la chiave non esiste
+            if (dato === null || dato === undefined)
+                return null;
+            return {
+                value: JSON.stringify(dato)
+            }; // stessa "forma" di prima: una stringa JSON
         },
         // Legge in UN SOLO viaggio di rete tutte le chiavi che iniziano con "prefix".
-        // Ritorna una mappa { chiave: valore }. Usato per caricare tutto un corso in un colpo solo.
+        // Ritorna una mappa { chiave: valoreStringaJSON }. Usato per caricare tutto un corso in un colpo solo.
         async getPrefix(prefix) {
-            const res = await fetch(APPS_SCRIPT_URL + '?action=getPrefix&prefix=' + encodeURIComponent(prefix) + '&_=' + Date.now(),
-            {
-                method: 'GET',
+            const res = await fetch(FIREBASE_URL + '/storage.json?_=' + Date.now(), {
                 cache: 'no-store'
             });
-            const data = await res.json();
-            if (data.error)
-                throw new Error(data.error);
+            const tutto = (await res.json()) || {};
             const mappa = {};
-            for (const riga of (data.rows || []))
-                mappa[riga.key] = riga.value;
+            for (const chiaveCodificata in tutto) {
+                const chiave = decodeURIComponent(chiaveCodificata);
+                if (chiave.indexOf(prefix) === 0)
+                    mappa[chiave] = JSON.stringify(tutto[chiaveCodificata]);
+            }
             return mappa;
         },
         async set(key, value) {
-            const res = await fetch(APPS_SCRIPT_URL, {
-                method: 'POST',
+            // "value" arriva già come stringa JSON valida (es. "[]" o "[{...}]"): è esattamente
+            // il corpo che Firebase si aspetta per un PUT, nessuna ulteriore conversione necessaria.
+            await fetch(_firebasePath(key), {
+                method: 'PUT',
                 headers: {
-                    'Content-Type': 'text/plain;charset=utf-8'
+                    'Content-Type': 'application/json'
                 },
-                // testo semplice = niente preflight CORS
-                body: JSON.stringify({
-                    action: 'set',
-                    key,
-                    value
-                })
+                body: value
             });
-            const data = await res.json();
-            if (data.error)
-                throw new Error(data.error);
         },
         async delete(key) {
-            const res = await fetch(APPS_SCRIPT_URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'text/plain;charset=utf-8'
-                },
-                body: JSON.stringify({
-                    action: 'delete',
-                    key
-                })
+            await fetch(_firebasePath(key), {
+                method: 'DELETE'
             });
-            const data = await res.json();
-            if (data.error)
-                throw new Error(data.error);
-        },
-        // Aggiunge un elemento a una lista condivisa in modo ATOMICO lato server (nessuna
-        // finestra di tempo in cui due utenti possano perdere la modifica l'uno dell'altro).
-        async appendIfAbsent(key, item, matchField, matchValue) {
-            const res = await fetch(APPS_SCRIPT_URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'text/plain;charset=utf-8'
-                },
-                body: JSON.stringify({
-                    action: 'appendIfAbsent',
-                    key,
-                    item,
-                    matchField,
-                    matchValue
-                })
-            });
-            const data = await res.json();
-            if (data.error)
-                throw new Error(data.error);
-            return JSON.parse(data.value);
-        },
-        // Rimuove un elemento da una lista condivisa, anche questa in modo atomico.
-        async removeMatching(key, matchField, matchValue) {
-            const res = await fetch(APPS_SCRIPT_URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'text/plain;charset=utf-8'
-                },
-                body: JSON.stringify({
-                    action: 'removeMatching',
-                    key,
-                    matchField,
-                    matchValue
-                })
-            });
-            const data = await res.json();
-            if (data.error)
-                throw new Error(data.error);
-            return JSON.parse(data.value);
         }
     };
 
@@ -908,26 +851,39 @@
 
     async function registraPartecipante() {
         const mioShard = nomeShard();
-        const chiave = corsoKey('partecipanti');
-        // Prima un controllo veloce dalla cache locale, per evitare una chiamata di rete
-        // quando siamo già registrati (caso normale, quasi sempre).
-        const elencoAttuale = await getRaw(chiave);
-        if (elencoAttuale.some(p => p.shard === mioShard))
+        const chiave = corsoKey('partecipanti') + '::' + mioShard; // es. "corso_X::partecipanti::mario"
+        // Con una chiave tutta sua per ogni partecipante, non c'è più nessuna lista condivisa da
+        // leggere-modificare-riscrivere: registrarsi è solo scrivere il proprio record, in totale
+        // sicurezza anche se altri corsisti si registrano nello stesso istante.
+        if (_cacheCorso && _cacheCorso[chiave] !== undefined)
+            return; // già registrato, niente da fare
+        const esistente = await remoteStorage.get(chiave);
+        if (esistente) {
+            if (_cacheCorso)
+                _cacheCorso[chiave] = esistente.value;
             return;
-        // La scrittura vera e propria è ATOMICA lato server (appendIfAbsent): nessuna finestra
-        // di tempo in cui due corsisti che si registrano quasi insieme possano cancellarsi a vicenda.
-        const nuovoElenco = await remoteStorage.appendIfAbsent(
-        chiave, {
+        }
+        await setRaw(chiave, {
             shard: mioShard,
             nome: currentUser,
             primoAccesso: nowStr()
-        }, 'shard', mioShard
-        );
-        if (_cacheCorso)
-            _cacheCorso[chiave] = JSON.stringify(nuovoElenco);
+        });
     }
     async function elencoPartecipanti() {
-        const elenco = await getRaw(corsoKey('partecipanti'), true);
+        const prefissoPartecipanti = corsoKey('partecipanti') + '::';
+        let elenco = [];
+        if (_cacheCorso) {
+            for (const k in _cacheCorso) {
+                if (k.indexOf(prefissoPartecipanti) === 0) {
+                    try {
+                        elenco.push(JSON.parse(_cacheCorso[k]));
+                    } catch (e) {}
+                }
+            }
+        } else {
+            const mappa = await remoteStorage.getPrefix(prefissoPartecipanti);
+            elenco = Object.values(mappa).map(v => JSON.parse(v));
+        }
         const shardCorrente = nomeShard();
         if (!elenco.some(p => p.shard === shardCorrente))
             elenco.push({
@@ -979,6 +935,8 @@
                 return [];
             }
         }
+        if (key === 'corsiRegistrati')
+            return await caricaElencoCorsi();
         if (!CHIAVI_CORSO.includes(key)) {
             return await getRaw(corsoKey(key), shared);
         }
@@ -1650,13 +1608,16 @@
     let adminCorsoValue = '';
 
     async function scaricaBackupCorso(corso) {
+        // Prende TUTTE le chiavi del corso in un colpo solo (cassetti e patch di ogni partecipante
+        // inclusi), non solo l'eventuale vecchia chiave semplice — quella coi dati veri.
+        const mappa = await remoteStorage.getPrefix('corso_' + corso + '::');
         const dati = {};
-        for (const k of CHIAVI_CORSO) {
+        for (const chiaveCompleta in mappa) {
             try {
-                const res = await remoteStorage.get('corso_' + corso + '::' + k);
-                dati[k] = res ? JSON.parse(res.value) : [];
-            } catch (e) {
-                dati[k] = [];
+                dati[chiaveCompleta] = JSON.parse(mappa[chiaveCompleta]);
+            }
+            catch (e) {
+                dati[chiaveCompleta] = mappa[chiaveCompleta];
             }
         }
         const contenuto = JSON.stringify({
@@ -1678,11 +1639,12 @@
     }
 
     async function eliminaCorso(corso) {
-        for (const k of CHIAVI_CORSO) {
+        // Stesso discorso: elimina davvero tutti i cassetti/patch del corso, non solo una chiave
+        // semplice che con l'architettura attuale non contiene più i dati veri.
+        const mappa = await remoteStorage.getPrefix('corso_' + corso + '::');
+        for (const chiaveCompleta in mappa) {
             try {
-                const res = await remoteStorage.get('corso_' + corso + '::' + k);
-                if (res)
-                    await remoteStorage.delete('corso_' + corso + '::' + k);
+                await remoteStorage.delete(chiaveCompleta);
             } catch (e) {}
         }
         await rimuoviCorsoRegistrato(corso);
@@ -1691,21 +1653,29 @@
     async function registraCorso(corso) {
         if (!STORAGE_CONFIGURATO)
             return false;
-        const elencoPrima = await loadList('corsiRegistrati', true);
-        if (elencoPrima.some(c => c.codice === corso))
-            return false; // già esistente
-        await remoteStorage.appendIfAbsent('corsiRegistrati', {
+        const chiave = 'corsiRegistrati::' + corso; // ogni corso ha una chiave tutta sua: zero rischio
+        const esistente = await remoteStorage.get(chiave); // di sovrascrivere l'elenco altrui,
+        if (esistente)
+            return false; // già esistente                // anche creando due corsi nello stesso istante.
+        await setRaw(chiave, {
             codice: corso,
             creatoDa: 'formatore',
             creatoIl: nowStr()
-        }, 'codice', corso);
+        });
         return true;
     }
 
     async function rimuoviCorsoRegistrato(corso) {
         if (!STORAGE_CONFIGURATO)
             return;
-        await remoteStorage.removeMatching('corsiRegistrati', 'codice', corso);
+        await remoteStorage.delete('corsiRegistrati::' + corso);
+    }
+
+    async function caricaElencoCorsi() {
+        if (!STORAGE_CONFIGURATO)
+            return [];
+        const mappa = await remoteStorage.getPrefix('corsiRegistrati::');
+        return Object.values(mappa).map(v => JSON.parse(v));
     }
 
     let adminNuovoCorsoValue = '';
@@ -4855,7 +4825,7 @@
 
     (async () => {
         if (!STORAGE_CONFIGURATO) {
-            console.warn('APPS_SCRIPT_URL non configurato: i dati non saranno condivisi finché non viene incollato l\'URL corretto nel codice.');
+            console.warn('FIREBASE_URL non configurato: i dati non saranno condivisi finché non viene impostato correttamente nel codice.');
         }
         await migraDatiLegacySeNecessario();
         const sessione = await _leggiSessioneDispositivo();
