@@ -2188,7 +2188,7 @@
                   <div class="sidebar-header">★ Menu utente</div>
                   <div class="tree">${buildTreeHTML([buildFavoritesNode(), ...MENU], 0, treeOpenState, '')}</div>
                 </div>
-                <div id="screen-content" style="flex:1; display:flex; flex-direction:column; overflow:hidden; min-height:0;"></div>
+                <div id="screen-content" style="flex:1; display:flex; flex-direction:column; overflow-y:auto; overflow-x:hidden; min-height:0;"></div>
               </div>
               <div class="statusbar">
                 <span class="${statusIsErr ? 'msg-err' : 'msg-ok'}">${statusMsg}</span>
