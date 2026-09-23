@@ -9,6 +9,11 @@
         box-sizing: border-box;
     }
 
+    :root {
+        --header-h: 116px;
+        --screen-top-h: 0px;
+    }
+
     html, body {
         margin: 0;
         padding: 0;
@@ -32,6 +37,13 @@
         z-index: 200;
         display: flex;
         flex-direction: column;
+        background: #ece9d8;
+    }
+
+    .screen-sticky-top {
+        position: sticky;
+        top: var(--header-h);
+        z-index: 150;
         background: #ece9d8;
     }
 
@@ -202,6 +214,11 @@
         border-right: 1px solid #8f8f8f;
         display: flex;
         flex-direction: column;
+        position: sticky;
+        top: var(--header-h);
+        max-height: calc(100vh - var(--header-h));
+        max-height: calc(100dvh - var(--header-h));
+        overflow-y: auto;
     }
 
     .sidebar-header {
@@ -214,11 +231,12 @@
         font-weight: 600;
         color: #4a4a4a;
         font-size: 11px;
+        position: sticky;
+        top: 0;
+        z-index: 5;
     }
 
     .tree {
-        flex: 1;
-        overflow-y: auto;
         padding: 4px 0;
     }
 
@@ -343,7 +361,6 @@
     }
 
     .tablewrap {
-        overflow: auto;
         background: white;
         margin: 8px 10px 10px 10px;
         border: 1px solid #8f8f8f;
@@ -364,7 +381,8 @@
         font-weight: 600;
         white-space: nowrap;
         position: sticky;
-        top: 0;
+        top: calc(var(--header-h) + var(--screen-top-h));
+        z-index: 50;
     }
 
     td {
@@ -1241,6 +1259,17 @@
         });
     }
 
+    // Righe d'ordine d'acquisto: gestione ricevimento parziale + annullamento per singola riga.
+    function rigaQtaRicevuta(r) {
+        return r.ricevuto ? Number(r.quantita) : Number(r.quantitaRicevuta || 0);
+    }
+    function rigaCompleta(r) {
+        return rigaQtaRicevuta(r) >= Number(r.quantita);
+    }
+    function rigaHaRicezioni(r) {
+        return rigaQtaRicevuta(r) > 0;
+    }
+
     function materialeInUso(codice) {
         const inOV = ordiniVendita.some(o => o.righe.some(r => r.prodotto === codice));
         const inOP = ordiniProduzione.some(o => o.prodotto === codice || o.componenti.some(c => c.codice === codice));
@@ -1344,6 +1373,7 @@
         causale: "",
         tipo: "",
         controparte: "",
+        materiale: "",
         dataDa: "",
         dataA: ""
     };
@@ -2335,32 +2365,94 @@
             renderMovStock(el);
         else if (screen === 'MB51')
             renderMovList(el);
+        applicaLayoutSticky();
     }
 
+    // Rende fisse (sticky) durante lo scroll: l'intestazione globale in alto (già gestita via CSS),
+    // e — per ogni schermata — tutto ciò che precede la prima tabella (titolo/pulsanti/campi form),
+    // più la riga di intestazione della prima tabella stessa. Il resto (righe della tabella) scorre
+    // liberamente. Le altezze sono misurate dal vero DOM ad ogni render, quindi si adattano da sole
+    // anche quando il contenuto della schermata cambia (form più lungo, banner di avviso, ecc.).
+    function applicaLayoutSticky() {
+        const headerEl = document.querySelector('.app-header-sticky');
+        if (headerEl)
+            document.documentElement.style.setProperty('--header-h', headerEl.offsetHeight + 'px');
+        const cont = document.getElementById('screen-content');
+        if (!cont)
+            return;
+        const figli = Array.from(cont.children);
+        const idxTabella = figli.findIndex(c => c.classList && c.classList.contains('tablewrap'));
+        if (idxTabella > 0) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'screen-sticky-top';
+            cont.insertBefore(wrapper, figli[0]);
+            for (let i = 0; i < idxTabella; i++)
+                wrapper.appendChild(figli[i]);
+            document.documentElement.style.setProperty('--screen-top-h', wrapper.offsetHeight + 'px');
+        } else {
+            document.documentElement.style.setProperty('--screen-top-h', '0px');
+        }
+    }
+    window.addEventListener('resize', () => {
+        if (document.getElementById('screen-content'))
+            applicaLayoutSticky();
+    });
+
     // ============ HELPERS DI DOMINIO ============
+    // Elenco in memoria da controllare per ciascun prefisso di numerazione, per evitare che un
+    // numero "nuovo" collida con uno già esistente (es. dati storici migrati da un vecchio schema
+    // di numerazione, prima dell'introduzione del contatore atomico). Senza questo controllo, due
+    // documenti diversi potrebbero finire con lo stesso "numero", e ogni ricerca/stampa/azione basata
+    // su quel numero troverebbe sempre il PRIMO dei due (causa nota di bug tipo "clicco un ordine e
+    // me ne mostra un altro").
+    function _elencoPerPrefisso(prefisso) {
+        if (prefisso === 'OV')
+            return ordiniVendita;
+        if (prefisso === 'OA')
+            return ordiniAcquisto;
+        if (prefisso === 'RA')
+            return richiesteAcquisto;
+        if (prefisso === 'OP')
+            return ordiniProduzione;
+        if (prefisso === 'DDT')
+            return consegne;
+        return [];
+    }
     // Genera il numero successivo per un tipo di documento (OV, OA, RA, OP, DDT) in modo
     // ATOMICO lato server: Firebase incrementa il contatore e restituisce il nuovo valore in
     // un'unica operazione, quindi due scritture quasi simultanee non possono mai produrre
     // lo stesso numero (il vecchio schema "conta quanti ce ne sono e aggiungi 1" invece sì).
+    // In più, se il numero generato risulta già usato da un documento esistente (tipicamente dati
+    // storici migrati con un altro schema di numerazione), il contatore viene fatto avanzare finché
+    // non si trova un numero davvero libero, così da auto-correggersi senza intervento manuale.
     async function prossimoNumero(prefisso) {
         if (!STORAGE_CONFIGURATO)
             return prefisso + '-' + String(Date.now()).slice(-4);
+        const elenco = _elencoPerPrefisso(prefisso);
         try {
             const chiave = corsoKey('contatori::' + prefisso);
             const url = FIREBASE_URL + '/storage/' + encodeURIComponent(chiave) + '.json';
-            const res = await fetch(url, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    '.sv': {
-                        increment: 1
-                    }
-                })
-            });
-            const nuovoValore = await res.json();
-            return prefisso + '-' + String(nuovoValore).padStart(4, '0');
+            for (let tentativo = 0; tentativo < 20; tentativo++) {
+                const res = await fetch(url, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        '.sv': {
+                            increment: 1
+                        }
+                    })
+                });
+                const nuovoValore = await res.json();
+                const candidato = prefisso + '-' + String(nuovoValore).padStart(4, '0');
+                if (!elenco.some(r => r.numero === candidato))
+                    return candidato;
+
+            }
+            // Numero già usato (dato storico): il contatore è già avanzato di 1, si riprova al giro successivo.
+            // Non dovrebbe mai arrivare qui salvo un numero enorme di collisioni: ripiego con timestamp.
+            return prefisso + '-' + String(Date.now()).slice(-4);
         } catch (e) {
             // Ripiego raro (rete assente): un numero comunque univoco per sessione, meglio di un duplicato certo.
             return prefisso + '-' + String(Date.now()).slice(-4);
@@ -2435,15 +2527,16 @@
         if (!o)
             return;
         const forn = fornitori.find(f => f.codice === o.fornitore);
-        const totale = o.righe.reduce((s, r) => s + r.quantita * r.prezzoUnitario, 0);
-        const righeHTML = o.righe.map(r => `
+        const righeValide = o.righe.filter(r => !r._rimossa);
+        const totale = righeValide.reduce((s, r) => s + r.quantita * r.prezzoUnitario, 0);
+        const righeHTML = righeValide.map(r => `
             <tr>
               <td style="padding:5px 4px; border-bottom:1px solid #ddd;">${materialeLabel(r.materiale)}</td>
               <td style="padding:5px 4px; border-bottom:1px solid #ddd; text-align:right;">${r.quantita}</td>
               <td style="padding:5px 4px; border-bottom:1px solid #ddd; text-align:right;">€ ${Number(r.prezzoUnitario).toFixed(2)}</td>
               <td style="padding:5px 4px; border-bottom:1px solid #ddd; text-align:right;">€ ${(r.quantita * r.prezzoUnitario).toFixed(2)}</td>
               <td style="padding:5px 4px; border-bottom:1px solid #ddd;">${r.dataConsegna}</td>
-              <td style="padding:5px 4px; border-bottom:1px solid #ddd;">${r.ricevuto ? '✔ ricevuto' : 'aperto'}</td>
+              <td style="padding:5px 4px; border-bottom:1px solid #ddd;">${rigaCompleta(r) ? '✔ ricevuto' : (rigaHaRicezioni(r) ? `parziale (${rigaQtaRicevuta(r)}/${r.quantita})` : 'aperto')}</td>
             </tr>`).join('');
         stampaDocumento(`
             <h2 style="margin:0 0 4px 0;">Ordine d'Acquisto ${o.numero}</h2>
@@ -2502,7 +2595,7 @@
         const o = ordiniAcquisto.find(x => x.numero === numeroOrdine);
         if (!o)
             return;
-        const idx = o.righe.findIndex(r => r.materiale === materiale && r.ricevuto);
+        const idx = o.righe.findIndex(r => r.materiale === materiale && rigaHaRicezioni(r));
         if (idx === -1)
             return;
         stampaRicevimento(numeroOrdine, idx);
@@ -2876,7 +2969,7 @@
 
                 return `
                         <div style="margin:0 0 10px 0;">
-                          <div class="tablewrap" style="margin:0; overflow-x:auto;">
+                          <div class="tablewrap" style="margin:0;">
                             <table style="min-width:${140 + buckets.length * 52}px;">
                               <thead><tr><th style="min-width:150px;">${nomeLinea}${capacitaMax > 0 ? ` <span style="font-weight:400; font-size:9.5px; color:#5a6470;">(max ${capacitaMax}/g)</span>` : ''}</th>${buckets.map(b => `<th style="text-align:center; min-width:48px; font-size:10px; ${b.speciale ? 'color:#a83232; background:#fbeaea;' : ''} ${b.oggi ? 'text-decoration:underline;' : ''}">${b.label}</th>`).join('')}</tr></thead>
                               <tbody>
@@ -2963,7 +3056,7 @@
                       <span>${r.codice} - ${r.descrizione}</span>
                       <span style="font-weight:400; font-size:10.5px; color:#3a4453;">Giacenza fisica: ${r.giacenza} | Già pianificato: ${r.pianificatoAperto} | Giacenza teorica: <strong>${r.giacenzaTeorica}</strong> | Fabbisogno residuo: <strong style="color:${r.fabbisogno > 0 ? '#a83232' : '#1a6b2e'}">${r.fabbisogno}</strong></span>
                     </div>
-                    <div class="tablewrap" style="margin:0; overflow-x:auto;">
+                    <div class="tablewrap" style="margin:0;">
                       <table style="min-width:${140 + buckets.length * 60}px;">
                         <thead>
                           <tr><th style="min-width:150px;">Dato</th>${buckets.map(b => `<th style="text-align:center; min-width:56px; font-size:10px; ${b.speciale ? 'color:#a83232; background:#fbeaea;' : ''} ${b.oggi ? 'text-decoration:underline;' : ''}">${b.label}</th>`).join('')}</tr>
@@ -3407,8 +3500,8 @@
         let tot = 0;
         ordiniAcquisto.forEach(o => {
             o.righe.forEach(r => {
-                if (r.materiale === codice && !r.ricevuto)
-                    tot += r.quantita;
+                if (r.materiale === codice && !r._rimossa && !rigaCompleta(r))
+                    tot += (Number(r.quantita) - rigaQtaRicevuta(r));
             });
         });
         return tot;
@@ -3438,10 +3531,10 @@
             const giaOrdinato = new Array(buckets.length).fill(0);
             ordiniAcquisto.forEach(o => {
                 o.righe.forEach(r => {
-                    if (r.materiale === mp.codice && !r.ricevuto) {
+                    if (r.materiale === mp.codice && !r._rimossa && !rigaCompleta(r)) {
                         const idx = bucketIndexForDate(r.dataConsegna, buckets);
                         if (idx !== null)
-                            giaOrdinato[idx] += r.quantita;
+                            giaOrdinato[idx] += (Number(r.quantita) - rigaQtaRicevuta(r));
                     }
                 });
             });
@@ -3486,7 +3579,7 @@
                           <div style="background:#dfe6f0; border:1px solid #b9c4d6; padding:6px 8px; font-weight:600; font-size:11.5px;">
                             ${mp.codice} - ${mp.descrizione} <span style="font-weight:400; font-size:10.5px; color:#3a4453;">| Giacenza fisica: ${getGiacenza(mp.codice)}</span>
                           </div>
-                          <div class="tablewrap" style="margin:0; overflow-x:auto;">
+                          <div class="tablewrap" style="margin:0;">
                             <table style="min-width:${140 + buckets.length * 52}px;">
                               <thead><tr><th style="min-width:150px;">Dato</th>${buckets.map(b => `<th style="text-align:center; min-width:48px; font-size:10px; ${b.speciale ? 'color:#a83232; background:#fbeaea;' : ''} ${b.oggi ? 'text-decoration:underline;' : ''}">${b.label}</th>`).join('')}</tr></thead>
                               <tbody>
@@ -3651,11 +3744,12 @@
                         <td>${semaforoStatoOrdine(o.stato)}</td>
                         <td>${o.creatoDa}</td><td>${o.confermatoDa || '-'}</td>
                         <td><span class="print-btn stampa-op" data-numero="${o.numero}">🖶 stampa</span></td>
-                        <td>${deleteActionCell('op-' + o.numero, o.stato === 'confermato' ? 'confermato, non eliminabile' : null)}</td>
+                        <td>${deleteActionCell('op-' + o.numero)}</td>
                       </tr>
                     `).join('')}
                 </tbody>
               </table>
+              <p style="font-size:10px; color:#8a8a80; padding:6px 8px;">Annullando un ordine confermato, i componenti scaricati vengono riaccreditati in OFFICINA e il prodotto finito caricato viene rimosso da OFFICINA (può risultare negativo se nel frattempo è stato già spostato o spedito).</p>
             </div>
           `;
         document.querySelectorAll('.stampa-op').forEach(elx => {
@@ -3665,10 +3759,39 @@
         document.querySelectorAll('.confirm-delete-yes').forEach(el => {
             el.addEventListener('click', () => withGuard(async () => {
                 const numero = el.dataset.key.replace('op-', '');
+                const o = ordiniProduzione.find(x => x.numero === numero);
+                if (!o) {
+                    confirmDeleteKey = null;
+                    renderScreenContent();
+                    return;
+                }
+                let avviso = '';
+                if (o.stato === 'confermato') {
+                    for (const c of o.componenti) {
+                        await registraMovimento({
+                            materiale: c.codice,
+                            locazioneDa: null,
+                            locazioneA: 'OFFICINA',
+                            quantita: c.qtaTotale,
+                            causale: 'Storno annullamento produzione CO15 (' + numero + ')'
+                        });
+                    }
+                    const dispProdotto = getGiacenzaLoc(o.prodotto, 'OFFICINA');
+                    await registraMovimento({
+                        materiale: o.prodotto,
+                        locazioneDa: 'OFFICINA',
+                        locazioneA: null,
+                        quantita: o.quantita,
+                        causale: 'Storno annullamento produzione CO15 (' + numero + ')'
+                    });
+                    if (o.quantita > dispProdotto) {
+                        avviso = ` ⚠️ Il prodotto finito era già stato spostato/spedito altrove: la giacenza di ${o.prodotto} in OFFICINA è ora negativa. Verificala in LS24/MMBE.`;
+                    }
+                }
                 await eliminaRecord('ordiniProduzione', numero);
-                ordiniProduzione = ordiniProduzione.filter(o => o.numero !== numero);
+                ordiniProduzione = ordiniProduzione.filter(x => x.numero !== numero);
                 confirmDeleteKey = null;
-                setStatus(`Ordine di produzione ${numero} eliminato.`);
+                setStatus(`Ordine di produzione ${numero} annullato.${o.stato === 'confermato' ? ' Componenti riaccreditati in OFFICINA, prodotto finito rimosso.' : ''}${avviso}`);
                 renderMain();
             }));
         });
@@ -3824,8 +3947,8 @@
         function quantitaGiaOrdinata(materiale) {
             let tot = 0;
             ordiniAcquisto.forEach(o => o.righe.forEach(r => {
-                if (r.materiale === materiale && !r.ricevuto)
-                    tot += Number(r.quantita) || 0;
+                if (r.materiale === materiale && !r._rimossa && !rigaCompleta(r))
+                    tot += (Number(r.quantita) - rigaQtaRicevuta(r));
             }));
             return tot;
         }
@@ -3892,10 +4015,10 @@
             <div class="tablewrap">
               <table>
                 <thead><tr><th>N. ordine</th><th>Fornitore</th><th>Materiale</th><th>Quantità</th><th>Prezzo unit.</th><th>Data consegna</th><th>Stato</th><th>Creato da</th><th>Stampa</th><th>Azioni</th></tr></thead>
-                <tbody>${ordiniAcquisto.length === 0 ? '<tr><td colspan="10" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun ordine d\'acquisto.</td></tr>' : ordiniAcquisto.flatMap(o => {const haRicevute = o.righe.some(r => r.ricevuto);return o.righe.map((r, i) => `<tr><td>${o.numero}</td><td>${fornitoreLabel(o.fornitore)}</td><td>${materialeLabel(r.materiale)}</td><td>${r.quantita}</td><td>${r.prezzoUnitario}</td><td>${r.dataConsegna}</td><td>${semaforoStatoOrdine(r.ricevuto ? 'ricevuto' : 'aperto')}</td><td>${o.creatoDa}</td><td>${i === 0 ? `<span class="print-btn stampa-oa" data-numero="${o.numero}">🖶 stampa</span>` : ''}</td><td>${i === 0 ? deleteActionCell('oa-' + o.numero, haRicevute ? 'già ricevuto in parte, non annullabile' : null) : ''}</td></tr>`);}).join('')}
+                <tbody>${ordiniAcquisto.filter(o => o.righe.some(r => !r._rimossa)).length === 0 ? '<tr><td colspan="10" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun ordine d\'acquisto.</td></tr>' : ordiniAcquisto.filter(o => o.righe.some(r => !r._rimossa)).flatMap(o => {const righeAttive = o.righe.map((r, i) => ({r,i})).filter(x => !x.r._rimossa);return righeAttive.map(({r, i}, pos) => {const stato = rigaCompleta(r) ? 'ricevuto' : (rigaHaRicezioni(r) ? `parziale (${rigaQtaRicevuta(r)}/${r.quantita})` : 'aperto');const azione = rigaHaRicezioni(r) ? deleteActionCell('oariga::' + o.numero + '::' + i, 'già ricevuta, non annullabile') : deleteActionCell('oariga::' + o.numero + '::' + i);return `<tr><td>${o.numero}</td><td>${fornitoreLabel(o.fornitore)}</td><td>${materialeLabel(r.materiale)}</td><td>${r.quantita}</td><td>${r.prezzoUnitario}</td><td>${r.dataConsegna}</td><td>${semaforoStatoOrdine(rigaCompleta(r) ? 'ricevuto' : (rigaHaRicezioni(r) ? 'parziale' : 'aperto'))} ${rigaHaRicezioni(r) && !rigaCompleta(r) ? `<span style="font-size:9.5px;color:#a86a1a;">${stato}</span>` : ''}</td><td>${o.creatoDa}</td><td>${pos === 0 ? `<span class="print-btn stampa-oa" data-numero="${o.numero}">🖶 stampa</span>` : ''}</td><td>${azione}</td></tr>`;});}).join('')}
                 </tbody>
               </table>
-              <p style="font-size:10px; color:#8a8a80; padding:6px 8px;">Annullando un ordine d'acquisto, le richieste d'acquisto (RA) che lo avevano generato tornano disponibili per essere riordinate o eliminate. Un ordine con righe già ricevute (MIGO) non può essere annullato.</p>
+              <p style="font-size:10px; color:#8a8a80; padding:6px 8px;">Annullando una riga d'ordine, la richiesta d'acquisto (RA) che l'aveva generata torna disponibile per essere riordinata o eliminata. Una riga già ricevuta (anche solo in parte, da MIGO) non può essere annullata; le altre righe dello stesso ordine restano annullabili singolarmente. Se annulli l'ultima riga attiva, l'intero ordine viene rimosso.</p>
             </div>
           `;
         document.getElementById('f-fornitore').addEventListener('change', e => {
@@ -3908,20 +4031,36 @@
         attachDeleteBaseListeners();
         document.querySelectorAll('.confirm-delete-yes').forEach(elx => {
             elx.addEventListener('click', () => withGuard(async () => {
-                const numero = elx.dataset.key.replace('oa-', '');
-                const o = ordiniAcquisto.find(x => x.numero === numero);
-                if (!o)
-                    return;
-                if (o.righe.some(r => r.ricevuto)) {
-                    setStatus('Impossibile annullare: alcune righe di questo ordine sono già state ricevute.', true);
+                const chiave = elx.dataset.key;
+                if (!chiave.startsWith('oariga::')) {
                     confirmDeleteKey = null;
                     renderScreenContent();
                     return;
                 }
-                const raDaRipristinare = [...new Set(o.righe.map(r => r.richiestaRif).filter(Boolean))];
-                await eliminaRecord('ordiniAcquisto', numero);
-                ordiniAcquisto = ordiniAcquisto.filter(x => x.numero !== numero);
-                for (const raNum of raDaRipristinare) {
+                const [, numero, indiceStr] = chiave.split('::');
+                const indice = Number(indiceStr);
+                const o = ordiniAcquisto.find(x => x.numero === numero);
+                if (!o) {
+                    confirmDeleteKey = null;
+                    renderScreenContent();
+                    return;
+                }
+                const riga = o.righe[indice];
+                if (!riga || rigaHaRicezioni(riga)) {
+                    setStatus('Impossibile annullare: questa riga è già stata (almeno in parte) ricevuta.', true);
+                    confirmDeleteKey = null;
+                    renderScreenContent();
+                    return;
+                }
+                riga._rimossa = true;
+                await applicaPatch('ordiniAcquisto', numero, {
+                    _rimossa: true
+                }, {
+                    arrayField: 'righe',
+                    arrayIndex: indice
+                });
+                const raNum = riga.richiestaRif;
+                if (raNum) {
                     await applicaPatch('richiesteAcquisto', raNum, {
                         stato: 'aperta'
                     });
@@ -3929,8 +4068,15 @@
                     if (ra)
                         ra.stato = 'aperta';
                 }
+                const restanoAttive = o.righe.some(r => !r._rimossa);
                 confirmDeleteKey = null;
-                setStatus(`Ordine d'acquisto ${numero} annullato. ${raDaRipristinare.length} richiesta/e d'acquisto tornata/e disponibile/i (consultabili/eliminabili in ME51N).`);
+                if (!restanoAttive) {
+                    await eliminaRecord('ordiniAcquisto', numero);
+                    ordiniAcquisto = ordiniAcquisto.filter(x => x.numero !== numero);
+                    setStatus(`Riga annullata. Era l'ultima riga attiva: l'ordine d'acquisto ${numero} è stato rimosso. Richiesta d'acquisto tornata disponibile in ME51N.`);
+                } else {
+                    setStatus(`Riga di ${materialeLabel(riga.materiale)} annullata dall'ordine ${numero}. Richiesta d'acquisto tornata disponibile in ME51N.`);
+                }
                 renderMain();
             }));
         });
@@ -3977,6 +4123,7 @@
                 dataConsegna: draftPO.selezionate[r.numero].dataConsegna,
                 richiestaRif: r.numero,
                 ricevuto: false,
+                quantitaRicevuta: 0,
             }));
             const ordiniFreschi = await loadList('ordiniAcquisto');
             const rec = {
@@ -4011,16 +4158,18 @@
         campo: null,
         asc: true
     };
+    let draftQtaMIGO = {}; // { "ordine::indice": quantità inserita per il ricevimento parziale }
     function renderMIGO(el) {
         const righeAperte = [];
         ordiniAcquisto.forEach(o => {
             o.righe.forEach((r, i) => {
-                if (!r.ricevuto)
+                if (!r._rimossa && !rigaCompleta(r))
                     righeAperte.push({
                         ordine: o.numero,
                         fornitore: o.fornitore,
                         indice: i,
-                        ...r
+                        ...r,
+                        residuo: Number(r.quantita) - rigaQtaRicevuta(r)
                     });
             });
         });
@@ -4042,7 +4191,11 @@
         },
         {
             campo: 'quantita',
-            label: 'Quantità'
+            label: 'Quantità ordinata'
+        },
+        {
+            campo: 'residuo',
+            label: 'Ancora da ricevere'
         },
         {
             campo: 'dataConsegna',
@@ -4054,7 +4207,7 @@
             righeAperte.sort((a, b) => {
                 let va = col.get ? col.get(a) : a[sortMIGO.campo];
                 let vb = col.get ? col.get(b) : b[sortMIGO.campo];
-                if (sortMIGO.campo === 'quantita') {
+                if (sortMIGO.campo === 'quantita' || sortMIGO.campo === 'residuo') {
                     va = Number(va) || 0;
                     vb = Number(vb) || 0;
                     return sortMIGO.asc ? va - vb : vb - va;
@@ -4067,17 +4220,20 @@
 
         el.innerHTML = `
             <div class="formwrap" style="padding-bottom:0;">
-              <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Righe d'ordine d'acquisto ancora da ricevere. Inserisci il numero del DDT del fornitore prima di confermare, per tracciabilità: la giacenza viene aggiornata al conferma. Clicca su un'intestazione di colonna per ordinare (es. "N. ordine" per raggruppare le righe dello stesso ordine). Lo storico dei ricevimenti già fatti si consulta in MB51.</p>
+              <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Righe d'ordine d'acquisto ancora da ricevere, anche solo in parte. Puoi ricevere meno della quantità residua: la riga resta aperta per il resto. Inserisci il numero del DDT del fornitore prima di confermare, per tracciabilità: la giacenza viene aggiornata al conferma. Clicca su un'intestazione di colonna per ordinare. Lo storico dei ricevimenti già fatti si consulta in MB51.</p>
             </div>
             <div class="tablewrap" style="margin-top:0;">
               <table>
-                <thead><tr><th>Stato</th>${colonne.map(c => `<th class="migo-sort-th" data-campo="${c.campo}" style="cursor:pointer; user-select:none;" title="Clicca per ordinare">${c.label}${sortMIGO.campo === c.campo ? (sortMIGO.asc ? ' ▲' : ' ▼') : ''}</th>`).join('')}<th>N. DDT fornitore</th><th>Azione</th></tr></thead>
-                <tbody>${righeAperte.length === 0 ? '<tr><td colspan="8" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna riga da ricevere.</td></tr>' : righeAperte.map(r => {const key = `${r.ordine}::${r.indice}`;const scaduto = r.dataConsegna && r.dataConsegna < isoDate(new Date());return `
+                <thead><tr><th>Stato</th>${colonne.map(c => `<th class="migo-sort-th" data-campo="${c.campo}" style="cursor:pointer; user-select:none;" title="Clicca per ordinare">${c.label}${sortMIGO.campo === c.campo ? (sortMIGO.asc ? ' ▲' : ' ▼') : ''}</th>`).join('')}<th>Qtà da ricevere ora</th><th>N. DDT fornitore</th><th>Azione</th></tr></thead>
+                <tbody>${righeAperte.length === 0 ? '<tr><td colspan="10" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna riga da ricevere.</td></tr>' : righeAperte.map(r => {const key = `${r.ordine}::${r.indice}`;const scaduto = r.dataConsegna && r.dataConsegna < isoDate(new Date());const parziale = rigaQtaRicevuta(r) > 0;return `
                         <tr>
-                          <td>${semaforo(scaduto ? 'rosso' : 'giallo', scaduto ? 'in ritardo' : 'in attesa')}</td>
-                          <td>${r.ordine}</td><td>${fornitoreLabel(r.fornitore)}</td><td>${materialeLabel(r.materiale)}</td><td>${r.quantita}</td><td>${r.dataConsegna}</td>
+                          <td>${semaforo(scaduto ? 'rosso' : 'giallo', scaduto ? 'in ritardo' : (parziale ? 'parziale' : 'in attesa'))}</td>
+                          <td>${r.ordine}</td><td>${fornitoreLabel(r.fornitore)}</td><td>${materialeLabel(r.materiale)}</td><td>${r.quantita}</td>
+                          <td style="font-weight:600;">${r.residuo}${parziale ? ` <span style="font-size:9.5px;color:#8a8a80;font-weight:400;">(già ricevuto ${rigaQtaRicevuta(r)})</span>` : ''}</td>
+                          <td>${r.dataConsegna}</td>
+                          <td><input type="number" min="1" max="${r.residuo}" step="1" class="qta-migo-input" data-key="${key}" value="${draftQtaMIGO[key] !== undefined ? draftQtaMIGO[key] : r.residuo}" style="width:65px; font-size:11px; padding:3px; border:1px solid #7f9db9;"></td>
                           <td><input type="text" class="ddt-input" data-key="${key}" value="${draftDDT[key] || ''}" placeholder="es. DDT-4521" style="width:100px; font-size:11px; padding:3px; border:1px solid #7f9db9;"></td>
-                          <td><button class="actionbtn ricevi-riga" data-ordine="${r.ordine}" data-indice="${r.indice}" style="padding:3px 8px; font-size:10.5px;">✔ Ricevi (MIGO)</button></td>
+                          <td><button class="actionbtn ricevi-riga" data-ordine="${r.ordine}" data-indice="${r.indice}" data-residuo="${r.residuo}" style="padding:3px 8px; font-size:10.5px;">✔ Ricevi (MIGO)</button></td>
                         </tr>`;}).join('')}
                 </tbody>
               </table>
@@ -4099,14 +4255,29 @@
                 draftDDT[e.target.dataset.key] = e.target.value;
             });
         });
+        document.querySelectorAll('.qta-migo-input').forEach(inp => {
+            inp.addEventListener('input', e => {
+                draftQtaMIGO[e.target.dataset.key] = e.target.value;
+            });
+        });
         document.querySelectorAll('.ricevi-riga').forEach(btn => {
             btn.addEventListener('click', () => withGuard(async () => {
                 const numeroOrdine = btn.dataset.ordine;
                 const indice = Number(btn.dataset.indice);
+                const residuo = Number(btn.dataset.residuo);
                 const key = `${numeroOrdine}::${indice}`;
                 const ddt = (draftDDT[key] || '').trim();
                 if (!ddt) {
                     setStatus('Inserisci il numero del DDT del fornitore prima di confermare il ricevimento.', true);
+                    return;
+                }
+                const qtaInserita = draftQtaMIGO[key] !== undefined ? Number(draftQtaMIGO[key]) : residuo;
+                if (!qtaInserita || qtaInserita <= 0) {
+                    setStatus('Inserisci una quantità da ricevere maggiore di zero.', true);
+                    return;
+                }
+                if (qtaInserita > residuo) {
+                    setStatus(`Non puoi ricevere più della quantità residua (${residuo}).`, true);
                     return;
                 }
                 const ordine = ordiniAcquisto.find(o => o.numero === numeroOrdine);
@@ -4114,19 +4285,24 @@
                     return;
                 const riga = ordine.righe[indice];
                 const dataRicevimento = nowStr();
-                riga.ricevuto = true;
+                const nuovaQtaRicevuta = rigaQtaRicevuta(riga) + qtaInserita;
+                const completo = nuovaQtaRicevuta >= Number(riga.quantita);
+                riga.quantitaRicevuta = nuovaQtaRicevuta;
+                riga.ricevuto = completo;
                 riga.ddtFornitore = ddt;
                 riga.dataRicevimento = dataRicevimento;
                 riga.ricevutoDa = currentUser;
+                const causaleParziale = qtaInserita < Number(riga.quantita) ? `Ricevimento MIGO parziale (${numeroOrdine}, DDT ${ddt})` : 'Ricevimento MIGO (' + numeroOrdine + ', DDT ' + ddt + ')';
                 await registraMovimento({
                     materiale: riga.materiale,
                     locazioneDa: null,
                     locazioneA: 'RICEZIONE',
-                    quantita: riga.quantita,
-                    causale: 'Ricevimento MIGO (' + numeroOrdine + ', DDT ' + ddt + ')'
+                    quantita: qtaInserita,
+                    causale: causaleParziale
                 });
                 await applicaPatch('ordiniAcquisto', numeroOrdine, {
-                    ricevuto: true,
+                    quantitaRicevuta: nuovaQtaRicevuta,
+                    ricevuto: completo,
                     ddtFornitore: ddt,
                     dataRicevimento,
                     ricevutoDa: currentUser
@@ -4134,14 +4310,15 @@
                     arrayField: 'righe',
                     arrayIndex: indice
                 });
-                if (ordine.righe.every(r => r.ricevuto)) {
+                if (ordine.righe.every(r => r._rimossa || rigaCompleta(r))) {
                     ordine.stato = 'ricevuto';
                     await applicaPatch('ordiniAcquisto', numeroOrdine, {
                         stato: 'ricevuto'
                     });
                 }
                 delete draftDDT[key];
-                setStatus(`Ricevimento registrato: ${riga.materiale} x ${riga.quantita} da ${numeroOrdine} (DDT ${ddt}) in RICEZIONE. Sposta il materiale prima di poterlo usare in produzione.`);
+                delete draftQtaMIGO[key];
+                setStatus(`Ricevimento registrato: ${riga.materiale} x ${qtaInserita} da ${numeroOrdine} (DDT ${ddt}) in RICEZIONE.${completo ? '' : ` Ancora da ricevere: ${Number(riga.quantita) - nuovaQtaRicevuta}.`} Sposta il materiale prima di poterlo usare in produzione.`);
                 renderMain();
             }));
         });
@@ -4167,8 +4344,15 @@
         URL.revokeObjectURL(url);
     }
 
+    let filtroMMBE = {
+        ricerca: ""
+    };
+    let sortMMBE = {
+        campo: null,
+        asc: true
+    };
     function renderMMBE(el) {
-        const righe = materiali.map(m => {
+        let righe = materiali.map(m => {
             const inArrivoAcquisti = ordinatoApertoPer(m.codice);
             const inArrivoProduzione = m.tipo === 'PF' ? pianificatoApertoPer(m.codice) : 0;
             const inArrivo = inArrivoAcquisti + inArrivoProduzione;
@@ -4191,28 +4375,107 @@
             };
         });
 
+        if (filtroMMBE.ricerca) {
+            const q = filtroMMBE.ricerca.trim().toLowerCase();
+            righe = righe.filter(r => r.codice.toLowerCase().includes(q) || r.descrizione.toLowerCase().includes(q));
+        }
+
+        const colonne = [
+        {
+            campo: 'codice',
+            label: 'Codice'
+        },
+        {
+            campo: 'descrizione',
+            label: 'Descrizione'
+        },
+        {
+            campo: 'tipo',
+            label: 'Tipo',
+            get: r => r.tipo === 'MP' ? 'Materia Prima' : 'Prodotto Finito'
+        },
+        {
+            campo: 'um',
+            label: 'UM'
+        },
+        {
+            campo: 'totale',
+            label: 'Effettiva'
+        },
+        {
+            campo: 'inArrivoAcquisti',
+            label: 'In entrata (acquisti)'
+        },
+        {
+            campo: 'inArrivoProduzione',
+            label: 'In entrata (produzione)'
+        },
+        {
+            campo: 'inUscitaProduzione',
+            label: 'In uscita (produzione)'
+        },
+        {
+            campo: 'inUscitaVendite',
+            label: 'In uscita (vendite)'
+        },
+        {
+            campo: 'teorica',
+            label: 'Giacenza proiettata'
+        },
+        ];
+        const campiNumerici = ['totale', 'inArrivoAcquisti', 'inArrivoProduzione', 'inUscitaProduzione', 'inUscitaVendite', 'teorica'];
+        if (sortMMBE.campo) {
+            const col = colonne.find(c => c.campo === sortMMBE.campo);
+            righe.sort((a, b) => {
+                let va = col.get ? col.get(a) : a[sortMMBE.campo];
+                let vb = col.get ? col.get(b) : b[sortMMBE.campo];
+                if (campiNumerici.includes(sortMMBE.campo)) {
+                    va = Number(va) || 0;
+                    vb = Number(vb) || 0;
+                    return sortMMBE.asc ? va - vb : vb - va;
+                }
+                va = String(va == null ? '' : va);
+                vb = String(vb == null ? '' : vb);
+                return sortMMBE.asc ? va.localeCompare(vb) : vb.localeCompare(va);
+            });
+        }
+
+        const etichette = {
+            codice: '',
+            descrizione: '',
+            tipo: '',
+            um: '',
+            totale: 'text-align:center;',
+            inArrivoAcquisti: 'text-align:center;',
+            inArrivoProduzione: 'text-align:center;',
+            inUscitaProduzione: 'text-align:center;',
+            inUscitaVendite: 'text-align:center;',
+            teorica: 'text-align:center;'
+        };
+
         el.innerHTML = `
             <div class="actionrow"><button class="actionbtn" id="export-mmbe">📥 Scarica report (Excel/CSV)</button></div>
+            <div class="formwrap" style="padding-bottom:0;">
+              <div class="formgrid" style="max-width:420px;">
+                <label>Ricerca codice/descrizione</label>
+                <input id="f-mmbe-ricerca" type="text" value="${filtroMMBE.ricerca}" placeholder="es. MP001 oppure parte della descrizione">
+              </div>
+            </div>
             <p style="font-size:10.5px; color:#5a6470; margin:0 10px 4px 10px;">
               <strong>Giacenza effettiva</strong> = quello fisicamente presente ora · <strong>In entrata</strong> = acquisti/produzione ancora da ricevere/confermare ·
               <strong>In uscita</strong> = già impegnato per produzione o vendite non ancora consegnate · <strong>Giacenza proiettata</strong> = effettiva + entrata − uscita.
-              Per il dettaglio per singola ubicazione di magazzino usa <strong>LS24</strong>.
+              Clicca un'intestazione di colonna per ordinare. Per il dettaglio per singola ubicazione di magazzino usa <strong>LS24</strong>.
             </p>
-            <div class="tablewrap" style="margin-top:0; overflow-x:auto;">
+            <div class="tablewrap" style="margin-top:0;">
               <table>
                 <thead><tr>
-                  <th>Stato</th><th>Codice</th><th>Descrizione</th><th>Tipo</th><th>UM</th>
-                  <th style="text-align:center;">Effettiva</th>
-                  <th style="text-align:center;">In entrata<br>(acquisti)</th>
-                  <th style="text-align:center;">In entrata<br>(produzione)</th>
-                  <th style="text-align:center;">In uscita<br>(produzione)</th>
-                  <th style="text-align:center;">In uscita<br>(vendite)</th>
-                  <th style="text-align:center;">Giacenza<br>proiettata</th>
+                  <th>Stato</th>
+                  ${colonne.map(c => `<th class="mmbe-sort-th" data-campo="${c.campo}" style="cursor:pointer; user-select:none; ${etichette[c.campo]}" title="Clicca per ordinare">${c.label}${sortMMBE.campo === c.campo ? (sortMMBE.asc ? ' ▲' : ' ▼') : ''}</th>`).join('')}
                 </tr></thead>
-                <tbody>${righe.length === 0 ? `<tr><td colspan="11" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun materiale in anagrafica.</td></tr>` : righe.map(r => {const coloreStato = r.teorica < 0 ? 'rosso' : (r.totale === 0 ? 'giallo' : 'verde');return `<tr>
+                <tbody>${righe.length === 0 ? `<tr><td colspan="11" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun materiale trovato.</td></tr>` : righe.map(r => {const coloreStato = r.teorica < 0 ? 'rosso' : (r.totale === 0 ? 'giallo' : 'verde');return `<tr>
                         <td>${semaforo(coloreStato, '')}</td>
                         <td>${r.codice}</td><td>${r.descrizione}</td><td>${r.tipo === 'MP' ? 'Materia Prima' : 'Prodotto Finito'}</td><td>${r.um}</td>
-                        <td style="text-align:center; font-weight:600;">${r.totale}</td>
+                        <td style="text-align:center; font-weight:600; color:${r.totale < 0 ? '#a83232' : '#1a1a1a'};">${r.totale}</td>
                         <td style="text-align:center; color:${r.inArrivoAcquisti > 0 ? '#3a5a8c' : '#9a9a8f'};">${r.inArrivoAcquisti || ''}</td>
                         <td style="text-align:center; color:${r.inArrivoProduzione > 0 ? '#3a5a8c' : '#9a9a8f'};">${r.inArrivoProduzione || ''}</td>
                         <td style="text-align:center; color:${r.inUscitaProduzione > 0 ? '#a86a1a' : '#9a9a8f'};">${r.inUscitaProduzione || ''}</td>
@@ -4223,6 +4486,27 @@
               </table>
             </div>
           `;
+        document.getElementById('f-mmbe-ricerca').addEventListener('input', e => {
+            filtroMMBE.ricerca = e.target.value;
+            const cursorPos = e.target.selectionStart;
+            renderScreenContent();
+            const newInput = document.getElementById('f-mmbe-ricerca');
+            if (newInput) {
+                newInput.focus();
+                newInput.setSelectionRange(cursorPos, cursorPos);
+            }
+        });
+        document.querySelectorAll('.mmbe-sort-th').forEach(th => {
+            th.addEventListener('click', () => {
+                if (sortMMBE.campo === th.dataset.campo)
+                    sortMMBE.asc = !sortMMBE.asc;
+                else {
+                    sortMMBE.campo = th.dataset.campo;
+                    sortMMBE.asc = true;
+                }
+                renderScreenContent();
+            });
+        });
         document.getElementById('export-mmbe').addEventListener('click', () => {
             const intestazioni = ['Stato', 'Codice', 'Descrizione', 'Tipo', 'UM', 'Effettiva', 'In entrata (acquisti)', 'In entrata (produzione)', 'In uscita (produzione)', 'In uscita (vendite)', 'Giacenza proiettata'];
             const righeCSV = righe.map(r => {
@@ -4238,6 +4522,11 @@
         materiale: "",
         locazione: "",
         soloConGiacenza: true
+    };
+    let ls24Dettaglio = null; // codice materiale attualmente aperto in dettaglio, o null
+    let sortLS24 = {
+        campo: null,
+        asc: true
     };
     function renderLS24(el) {
         let righe = [];
@@ -4260,12 +4549,87 @@
         if (filtroLS24.locazione)
             righe = righe.filter(r => r.locazione === filtroLS24.locazione);
         if (filtroLS24.soloConGiacenza)
-            righe = righe.filter(r => r.quantita > 0);
-        righe.sort((a, b) => a.locazione.localeCompare(b.locazione) || a.materiale.localeCompare(b.materiale));
+            righe = righe.filter(r => r.quantita !== 0);
+
+        const colonneLS24 = [
+        {
+            campo: 'locazione',
+            label: 'Ubicazione'
+        },
+        {
+            campo: 'locDescrizione',
+            label: 'Descrizione ubicazione'
+        },
+        {
+            campo: 'materiale',
+            label: 'Materiale'
+        },
+        {
+            campo: 'descrizione',
+            label: 'Descrizione materiale'
+        },
+        {
+            campo: 'tipo',
+            label: 'Tipo',
+            get: r => r.tipo === 'MP' ? 'Materia Prima' : 'Prodotto Finito'
+        },
+        {
+            campo: 'quantita',
+            label: 'Giacenza'
+        },
+        {
+            campo: 'um',
+            label: 'UM'
+        },
+        ];
+        if (sortLS24.campo) {
+            const col = colonneLS24.find(c => c.campo === sortLS24.campo);
+            righe.sort((a, b) => {
+                let va = col.get ? col.get(a) : a[sortLS24.campo];
+                let vb = col.get ? col.get(b) : b[sortLS24.campo];
+                if (sortLS24.campo === 'quantita') {
+                    va = Number(va) || 0;
+                    vb = Number(vb) || 0;
+                    return sortLS24.asc ? va - vb : vb - va;
+                }
+                va = String(va == null ? '' : va);
+                vb = String(vb == null ? '' : vb);
+                return sortLS24.asc ? va.localeCompare(vb) : vb.localeCompare(va);
+            });
+        } else {
+            righe.sort((a, b) => a.locazione.localeCompare(b.locazione) || a.materiale.localeCompare(b.materiale));
+        }
+
+        const matDettaglio = ls24Dettaglio ? materiali.find(m => m.codice === ls24Dettaglio) : null;
+        let dettaglioHTML = '';
+        if (matDettaglio) {
+            const perLoc = locazioni.map(l => ({
+                codice: l.codice,
+                descrizione: l.descrizione,
+                q: getGiacenzaLoc(matDettaglio.codice, l.codice)
+            })).filter(x => x.q !== 0);
+            const totale = getGiacenza(matDettaglio.codice);
+            const inArrivoAcquisti = ordinatoApertoPer(matDettaglio.codice);
+            const inArrivoProduzione = matDettaglio.tipo === 'PF' ? pianificatoApertoPer(matDettaglio.codice) : 0;
+            const inUscitaProduzione = consumoProduzioneApertoPer(matDettaglio.codice);
+            const inUscitaVendite = matDettaglio.tipo === 'PF' ? venditeAperteApertoPer(matDettaglio.codice) : 0;
+            const teorica = totale + inArrivoAcquisti + inArrivoProduzione - inUscitaProduzione - inUscitaVendite;
+            dettaglioHTML = `
+                  <div style="margin:0 10px 10px 10px; padding:10px; background:#f5f4ee; border:1px solid #c8c2a8;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                      <strong style="font-size:12.5px;">📦 Dettaglio ${matDettaglio.codice} — ${matDettaglio.descrizione}</strong>
+                      <span class="rowaction ls24-chiudi-dettaglio">✕ chiudi</span>
+                    </div>
+                    <p style="font-size:10.5px; margin:2px 0;">Tipo: <strong>${matDettaglio.tipo === 'MP' ? 'Materia Prima' : 'Prodotto Finito'}</strong> · UM: <strong>${matDettaglio.um}</strong> · Scorta minima: <strong>${matDettaglio.scortaMinima || 0}</strong> · Scorta sicurezza: <strong>${matDettaglio.scortaSicurezza || 0}</strong> · Punto riordino: <strong>${matDettaglio.puntoRiordino || 0}</strong></p>
+                    <p style="font-size:10.5px; margin:6px 0 2px 0;"><strong>Giacenza effettiva totale: ${totale}</strong> · In entrata (acquisti): ${inArrivoAcquisti} · In entrata (produzione): ${inArrivoProduzione} · In uscita (produzione): ${inUscitaProduzione} · In uscita (vendite): ${inUscitaVendite} · Giacenza proiettata: <strong style="color:${teorica < 0 ? '#a83232' : '#1a1a1a'};">${teorica}</strong></p>
+                    <p style="font-size:10.5px; margin:6px 0 2px 0;"><strong>Per ubicazione:</strong> ${perLoc.length === 0 ? 'nessuna giacenza in nessuna ubicazione.' : perLoc.map(x => `${x.codice}: <strong>${x.q}</strong>`).join(' · ')}</p>
+                    <span class="rowaction ls24-vai-mb51" data-codice="${matDettaglio.codice}" style="margin-top:4px; display:inline-block;">📄 vedi movimenti di questo materiale (MB51)</span>
+                  </div>`;
+        }
 
         el.innerHTML = `
             <div class="formwrap" style="padding-bottom:0;">
-              <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Giacenza di ogni materiale per singola ubicazione di magazzino (bin) — il dettaglio "fisico" di dove si trova la merce. Per la panoramica aggregata per materiale (entrate/uscite previste, giacenza proiettata) usa MMBE.</p>
+              <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Giacenza di ogni materiale per singola ubicazione di magazzino (bin) — il dettaglio "fisico" di dove si trova la merce. Clicca su un codice materiale per vedere il dettaglio completo. Per la panoramica aggregata per materiale (entrate/uscite previste, giacenza proiettata) usa MMBE.</p>
             </div>
             <div class="actionrow"><button class="actionbtn" id="export-ls24">📥 Scarica report (Excel/CSV)</button></div>
             <div class="formwrap">
@@ -4282,15 +4646,16 @@
                 </select>
                 <label>Mostra</label>
                 <select id="f-ls24-solocongiacenza">
-                  <option value="si" ${filtroLS24.soloConGiacenza ? 'selected' : ''}>Solo con giacenza &gt; 0</option>
+                  <option value="si" ${filtroLS24.soloConGiacenza ? 'selected' : ''}>Solo con giacenza diversa da zero</option>
                   <option value="no" ${!filtroLS24.soloConGiacenza ? 'selected' : ''}>Tutte le combinazioni (anche a zero)</option>
                 </select>
               </div>
             </div>
+            ${dettaglioHTML}
             <div class="tablewrap">
               <table>
-                <thead><tr><th>Ubicazione</th><th>Descrizione ubicazione</th><th>Materiale</th><th>Descrizione materiale</th><th>Tipo</th><th>Giacenza</th><th>UM</th></tr></thead>
-                <tbody>${righe.length === 0 ? '<tr><td colspan="7" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna giacenza da mostrare con i filtri correnti.</td></tr>' : righe.map(r => `<tr><td>${r.locazione}</td><td>${r.locDescrizione}</td><td>${r.materiale}</td><td>${r.descrizione}</td><td>${r.tipo === 'MP' ? 'Materia Prima' : 'Prodotto Finito'}</td><td style="text-align:center; font-weight:600;">${r.quantita}</td><td>${r.um}</td></tr>`).join('')}
+                <thead><tr>${colonneLS24.map(c => `<th class="ls24-sort-th" data-campo="${c.campo}" style="cursor:pointer; user-select:none;" title="Clicca per ordinare">${c.label}${sortLS24.campo === c.campo ? (sortLS24.asc ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead>
+                <tbody>${righe.length === 0 ? '<tr><td colspan="7" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna giacenza da mostrare con i filtri correnti.</td></tr>' : righe.map(r => `<tr><td>${r.locazione}</td><td>${r.locDescrizione}</td><td><span class="rowaction ls24-apri-dettaglio" data-codice="${r.materiale}">${r.materiale}</span></td><td>${r.descrizione}</td><td>${r.tipo === 'MP' ? 'Materia Prima' : 'Prodotto Finito'}</td><td style="text-align:center; font-weight:600; color:${r.quantita < 0 ? '#a83232' : '#1a1a1a'};">${r.quantita}</td><td>${r.um}</td></tr>`).join('')}
                 </tbody>
               </table>
             </div>
@@ -4307,6 +4672,44 @@
             filtroLS24.soloConGiacenza = e.target.value === 'si';
             renderScreenContent();
         });
+        document.querySelectorAll('.ls24-sort-th').forEach(th => {
+            th.addEventListener('click', () => {
+                if (sortLS24.campo === th.dataset.campo)
+                    sortLS24.asc = !sortLS24.asc;
+                else {
+                    sortLS24.campo = th.dataset.campo;
+                    sortLS24.asc = true;
+                }
+                renderScreenContent();
+            });
+        });
+        document.querySelectorAll('.ls24-apri-dettaglio').forEach(spanx => {
+            spanx.addEventListener('click', () => {
+                ls24Dettaglio = spanx.dataset.codice;
+                renderScreenContent();
+            });
+        });
+        const chiudiBtn = document.querySelector('.ls24-chiudi-dettaglio');
+        if (chiudiBtn)
+            chiudiBtn.addEventListener('click', () => {
+                ls24Dettaglio = null;
+                renderScreenContent();
+            });
+        const vaiMb51 = document.querySelector('.ls24-vai-mb51');
+        if (vaiMb51)
+            vaiMb51.addEventListener('click', () => {
+                filtroMov = {
+                    causale: "",
+                    tipo: "",
+                    controparte: "",
+                    materiale: vaiMb51.dataset.codice,
+                    dataDa: "",
+                    dataA: ""
+                };
+                screen = 'MB51';
+                statusMsg = '';
+                renderMain();
+            });
         document.getElementById('export-ls24').addEventListener('click', () => {
             const intestazioni = ['Ubicazione', 'Descrizione ubicazione', 'Materiale', 'Descrizione materiale', 'Tipo', 'Giacenza', 'UM'];
             const righeCSV = righe.map(r => [r.locazione, r.locDescrizione, r.materiale, r.descrizione, r.tipo === 'MP' ? 'Materia Prima' : 'Prodotto Finito', r.quantita, r.um]);
@@ -4405,7 +4808,7 @@
                   ${CAUSALI_MOVIMENTO.map(c => `<option value="${c}" ${draftMov.causale === c ? 'selected' : ''}>${c}</option>`).join('')}
                 </select>
               </div>
-              ${draftMov.materiale && draftMov.locazioneDa ? `<p style="font-size:11px; margin-top:8px;">Disponibile in ${draftMov.locazioneDa}: <strong>${getGiacenzaLoc(draftMov.materiale, draftMov.locazioneDa)}</strong></p>` : ''}
+              ${draftMov.materiale && draftMov.locazioneDa ? `<p style="font-size:11px; margin-top:8px;">Disponibile in ${draftMov.locazioneDa}: <strong>${getGiacenzaLoc(draftMov.materiale, draftMov.locazioneDa)}</strong>${Number(draftMov.quantita) > getGiacenzaLoc(draftMov.materiale, draftMov.locazioneDa) ? ` <span style="color:#a83232;">⚠ quantità superiore al disponibile: la giacenza risulterà negativa (comunque consentito, per scopi didattici)</span>` : ''}</p>` : ''}
             </div>
           `;
         document.getElementById('f-materiale').addEventListener('change', e => {
@@ -4434,10 +4837,7 @@
                 return;
             }
             const disponibile = getGiacenzaLoc(draftMov.materiale, draftMov.locazioneDa);
-            if (qta > disponibile) {
-                setStatus(`Disponibilità insufficiente in ${draftMov.locazioneDa}: solo ${disponibile}.`, true);
-                return;
-            }
+            const risultatoNegativo = qta > disponibile;
             await registraMovimento({
                 materiale: draftMov.materiale,
                 locazioneDa: draftMov.locazioneDa,
@@ -4445,7 +4845,11 @@
                 quantita: qta,
                 causale: draftMov.causale
             });
-            setStatus(`Spostati ${qta} ${draftMov.materiale} da ${draftMov.locazioneDa} a ${draftMov.locazioneA}.`);
+            if (risultatoNegativo) {
+                setStatus(`⚠️ Movimento registrato, ma in ${draftMov.locazioneDa} erano disponibili solo ${disponibile}: la giacenza di ${draftMov.materiale} in quella ubicazione è ora NEGATIVA (${disponibile - qta}). Verificala in LS24/MMBE.`, true);
+            } else {
+                setStatus(`Spostati ${qta} ${draftMov.materiale} da ${draftMov.locazioneDa} a ${draftMov.locazioneA}.`);
+            }
             draftMov.quantita = '1';
             renderMain();
         }));
@@ -4494,6 +4898,8 @@
             elenco = elenco.filter(m => m.tipo === filtroMov.tipo);
         if (filtroMov.controparte)
             elenco = elenco.filter(m => m.controparte === filtroMov.controparte);
+        if (filtroMov.materiale)
+            elenco = elenco.filter(m => m.materiale === filtroMov.materiale);
         if (filtroMov.dataDa)
             elenco = elenco.filter(m => isoDate(new Date(m.creatoIl.split(' ')[0].split('/').reverse().join('-'))) >= filtroMov.dataDa);
         if (filtroMov.dataA)
@@ -4565,6 +4971,11 @@
             <div class="actionrow"><button class="actionbtn" id="export-mov">📥 Scarica report (Excel/CSV)</button></div>
             <div class="formwrap">
               <div class="formgrid">
+                <label>Filtra per materiale</label>
+                <select id="f-filtro-materiale">
+                  <option value="">-- tutti --</option>
+                  ${materiali.map(m => `<option value="${m.codice}" ${filtroMov.materiale === m.codice ? 'selected' : ''}>${m.codice} - ${m.descrizione}</option>`).join('')}
+                </select>
                 <label>Filtra per tipo</label>
                 <select id="f-filtro-tipo">
                   <option value="">-- tutti --</option>
@@ -4605,6 +5016,10 @@
                 }
                 renderScreenContent();
             });
+        });
+        document.getElementById('f-filtro-materiale').addEventListener('change', e => {
+            filtroMov.materiale = e.target.value;
+            renderScreenContent();
         });
         document.getElementById('f-filtro-tipo').addEventListener('change', e => {
             filtroMov.tipo = e.target.value;
@@ -4875,7 +5290,7 @@
 
         let righeAcquistoRitardo = 0;
         ordiniAcquisto.forEach(o => o.righe.forEach(r => {
-            if (!r.ricevuto && r.dataConsegna && r.dataConsegna < oggiISO)
+            if (!r._rimossa && !rigaCompleta(r) && r.dataConsegna && r.dataConsegna < oggiISO)
                 righeAcquistoRitardo++;
         }));
 
