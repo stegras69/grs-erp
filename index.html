@@ -595,12 +595,32 @@
         return FIREBASE_URL + '/storage/' + encodeURIComponent(key) + '.json';
     }
 
+    // IMPORTANTE: fetch() NON lancia un errore per risposte HTTP di errore (401/403/500/...),
+    // lo fa solo per fallimenti di rete veri e propri (DNS, connessione assente). Se non controlliamo
+    // esplicitamente res.ok, una scrittura rifiutata da Firebase (es. regole di sicurezza, chiave
+    // non valida) sembra "riuscita" qui, il chiamante la considera andata a buon fine, la cache di
+    // sessione viene aggiornata come se il dato fosse salvato — ma sul server non è cambiato nulla.
+    // Risultato: l'azione sembra funzionare (es. un ordine sparisce dalla lista), ma al refresh
+    // della pagina, che ricarica i dati veri dal server, quel dato torna come prima. Per questo
+    // ogni chiamata qui controlla res.ok e lancia un errore se la richiesta non è realmente riuscita,
+    // così il meccanismo di retry/fallback/diagnostica già presente in getRaw/setRaw entra in azione
+    // davvero invece di essere bypassato in silenzio.
+    async function _verificaRisposta(res, azione, key) {
+        if (!res.ok) {
+            let corpo = '';
+            try {
+                corpo = await res.text();
+            } catch (e) {}
+            throw new Error(`Firebase ha rifiutato la ${azione} su "${key}": HTTP ${res.status} ${res.statusText}${corpo ? ' — ' + corpo.slice(0, 200) : ''}`);
+        }
+    }
     const remoteStorage = {
         async get(key) {
             // "&_=" con timestamp: impedisce al browser di servire una risposta vecchia dalla cache.
             const res = await fetch(_firebasePath(key) + '?_=' + Date.now(), {
                 cache: 'no-store'
             });
+            await _verificaRisposta(res, 'lettura', key);
             const dato = await res.json(); // null se la chiave non esiste
             if (dato === null || dato === undefined)
                 return null;
@@ -614,6 +634,7 @@
             const res = await fetch(FIREBASE_URL + '/storage.json?_=' + Date.now(), {
                 cache: 'no-store'
             });
+            await _verificaRisposta(res, 'lettura elenco', prefix);
             const tutto = (await res.json()) || {};
             const mappa = {};
             for (const chiaveCodificata in tutto) {
@@ -626,18 +647,20 @@
         async set(key, value) {
             // "value" arriva già come stringa JSON valida (es. "[]" o "[{...}]"): è esattamente
             // il corpo che Firebase si aspetta per un PUT, nessuna ulteriore conversione necessaria.
-            await fetch(_firebasePath(key), {
+            const res = await fetch(_firebasePath(key), {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: value
             });
+            await _verificaRisposta(res, 'scrittura', key);
         },
         async delete(key) {
-            await fetch(_firebasePath(key), {
+            const res = await fetch(_firebasePath(key), {
                 method: 'DELETE'
             });
+            await _verificaRisposta(res, 'eliminazione', key);
         }
     };
 
@@ -3791,7 +3814,11 @@
                 await eliminaRecord('ordiniProduzione', numero);
                 ordiniProduzione = ordiniProduzione.filter(x => x.numero !== numero);
                 confirmDeleteKey = null;
-                setStatus(`Ordine di produzione ${numero} annullato.${o.stato === 'confermato' ? ' Componenti riaccreditati in OFFICINA, prodotto finito rimosso.' : ''}${avviso}`);
+                if (!storageOk) {
+                    setStatus(`⚠️ Ordine rimosso solo su questo dispositivo: il salvataggio sul server condiviso è fallito. Aggiornando la pagina potrebbe ricomparire. Riprova quando la connessione torna disponibile.`, true);
+                } else {
+                    setStatus(`Ordine di produzione ${numero} annullato.${o.stato === 'confermato' ? ' Componenti riaccreditati in OFFICINA, prodotto finito rimosso.' : ''}${avviso}`);
+                }
                 renderMain();
             }));
         });
@@ -4073,9 +4100,17 @@
                 if (!restanoAttive) {
                     await eliminaRecord('ordiniAcquisto', numero);
                     ordiniAcquisto = ordiniAcquisto.filter(x => x.numero !== numero);
-                    setStatus(`Riga annullata. Era l'ultima riga attiva: l'ordine d'acquisto ${numero} è stato rimosso. Richiesta d'acquisto tornata disponibile in ME51N.`);
+                    if (!storageOk) {
+                        setStatus(`⚠️ Riga rimossa solo su questo dispositivo: il salvataggio sul server condiviso è fallito. Aggiornando la pagina l'ordine ${numero} potrebbe ricomparire. Riprova quando la connessione torna disponibile.`, true);
+                    } else {
+                        setStatus(`Riga annullata. Era l'ultima riga attiva: l'ordine d'acquisto ${numero} è stato rimosso. Richiesta d'acquisto tornata disponibile in ME51N.`);
+                    }
                 } else {
-                    setStatus(`Riga di ${materialeLabel(riga.materiale)} annullata dall'ordine ${numero}. Richiesta d'acquisto tornata disponibile in ME51N.`);
+                    if (!storageOk) {
+                        setStatus(`⚠️ Riga rimossa solo su questo dispositivo: il salvataggio sul server condiviso è fallito. Aggiornando la pagina la riga potrebbe ricomparire. Riprova quando la connessione torna disponibile.`, true);
+                    } else {
+                        setStatus(`Riga di ${materialeLabel(riga.materiale)} annullata dall'ordine ${numero}. Richiesta d'acquisto tornata disponibile in ME51N.`);
+                    }
                 }
                 renderMain();
             }));
