@@ -17,12 +17,15 @@
         font-size: 11.5px;
         background: #ece9d8;
         color: #1a1a1a;
+        overflow: hidden;
     }
 
     #app {
         display: flex;
         flex-direction: column;
         height: 100vh;
+        height: 100dvh;
+        min-height: 0;
     }
 
     .titlebar {
@@ -342,6 +345,7 @@
         background: white;
         margin: 8px 10px 10px 10px;
         border: 1px solid #8f8f8f;
+        min-height: 0;
     }
 
     table {
@@ -746,6 +750,107 @@
         try {
             localStorage.removeItem(CHIAVE_SESSIONE_DISPOSITIVO);
         } catch (e) {}
+    }
+
+    // ---- ID DISPOSITIVO e BAN: un identificativo persistito nel browser (non l'IP, perché
+    // un'aula condivide spesso lo stesso WiFi/IP pubblico — bannare per IP rischierebbe di
+    // bloccare tutti i corsisti insieme invece del singolo dispositivo). Sopravvive ai refresh
+    // e al cambio nome/corso; sparisce solo cancellando i dati del browser o usando un altro browser/dispositivo.
+    const CHIAVE_DEVICE_ID = '__device_id_dispositivo__';
+    function getDeviceId() {
+        try {
+            let id = localStorage.getItem(CHIAVE_DEVICE_ID);
+            if (!id) {
+                id = 'dev-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+                localStorage.setItem(CHIAVE_DEVICE_ID, id);
+            }
+            return id;
+        } catch (e) {
+            return 'dev-sconosciuto';
+        }
+    }
+    async function dispositivoBannato() {
+        if (!STORAGE_CONFIGURATO)
+            return null;
+        try {
+            const res = await remoteStorage.get('dispositiviBannati::' + getDeviceId());
+            return res ? JSON.parse(res.value) : null;
+        } catch (e) {
+            return null;
+        } // in caso di dubbio (rete assente) non blocchiamo l'accesso
+    }
+    async function bannaDispositivoCorrente(motivo) {
+        if (!STORAGE_CONFIGURATO)
+            return;
+        try {
+            await remoteStorage.set('dispositiviBannati::' + getDeviceId(), JSON.stringify({
+                motivo,
+                quando: nowStr()
+            }));
+        }
+        catch (e) {}
+    }
+    async function elencoDispositiviBannati() {
+        if (!STORAGE_CONFIGURATO)
+            return [];
+        try {
+            const mappa = await remoteStorage.getPrefix('dispositiviBannati::');
+            return Object.keys(mappa).map(k => ({
+                id: k.replace('dispositiviBannati::', ''),
+                ...JSON.parse(mappa[k])
+            }));
+        } catch (e) {
+            return [];
+        }
+    }
+    async function sbloccaDispositivo(id) {
+        if (!STORAGE_CONFIGURATO)
+            return;
+        try {
+            await remoteStorage.delete('dispositiviBannati::' + id);
+        } catch (e) {}
+    }
+    // ---- DISPOSITIVI FIDATI: un dispositivo diventa "fidato" automaticamente la prima volta
+    // che inserisce correttamente ENTRAMBI i PIN. Da quel momento, un PIN sbagliato su quel
+    // dispositivo non banna più (solo respinge) — protegge il formatore da un autoban per errore
+    // di battitura, mentre un dispositivo mai autenticato correttamente (un vero intruso) resta
+    // bannato al primo tentativo sbagliato, come previsto.
+    async function dispositivoFidato() {
+        if (!STORAGE_CONFIGURATO)
+            return false;
+        try {
+            return !!(await remoteStorage.get('dispositiviFidati::' + getDeviceId()));
+        }
+        catch (e) {
+            return false;
+        }
+    }
+    async function segnaDispositivoFidato() {
+        if (!STORAGE_CONFIGURATO)
+            return;
+        try {
+            await remoteStorage.set('dispositiviFidati::' + getDeviceId(), JSON.stringify({
+                dal: nowStr()
+            }));
+        }
+        catch (e) {}
+    }
+    function renderDispositivoBannato(info) {
+        document.getElementById('app').innerHTML = `
+            <div class="login-overlay"><div class="login-box" style="text-align:center;">
+              <h2 style="margin:0 0 8px 0; color:#a83232;">⛔ Accesso non consentito</h2>
+              <p>Questo dispositivo non può usare il programma.</p>
+              <p style="font-size:11px; color:#8a8a80;">Rivolgiti al formatore per essere riabilitato.</p>
+              <button id="btn-riprova-ban" style="margin-top:10px;">Riprova</button>
+            </div></div>
+          `;
+        document.getElementById('btn-riprova-ban').addEventListener('click', async () => {
+            const ban = await dispositivoBannato();
+            if (ban)
+                renderDispositivoBannato(ban);
+            else
+                renderCorsoSelect();
+        });
     }
 
     async function getRaw(storageKey) {
@@ -1207,7 +1312,8 @@
     let mf50CellDraft = {}; // { "codice::linea::indiceSettimana": valoreInserito } — bozza della matrice settimanale MF50
     let draftLinea = {
         codice: "",
-        descrizione: ""
+        descrizione: "",
+        capacitaMax: ""
     };
     let draftAssegnazione = {
         prodotto: "",
@@ -1337,7 +1443,7 @@
                     screen: "XK01"
                 },
                 {
-                    label: "Associa materiale a fornitore (semplificato)",
+                    label: "ZMF01 - Associa materiale a fornitore",
                     active: true,
                     screen: "ASSOCMF"
                 },
@@ -1569,15 +1675,22 @@
         }
     }
 
-    const ADMIN_PIN = '2026'; // PIN semplice per evitare click accidentali dei corsisti — non è una vera sicurezza, cambialo modificando questa riga nel codice
+    const ADMIN_PIN_1 = '2026'; // primo PIN — cambiali modificando queste due righe nel codice
+    const ADMIN_PIN_2 = '7391'; // secondo PIN — richiesto SUBITO dopo il primo, nella stessa sequenza
 
+    let _adminPinFase = 1; // 1 = primo PIN, 2 = secondo PIN
     function renderAdminPin() {
+        _adminPinFase = 1;
+        _renderAdminPinInterno();
+    }
+    function _renderAdminPinInterno() {
         const app = document.getElementById('app');
         app.innerHTML = `
             <div class="login-overlay">
               <div class="login-box">
                 <h2 style="margin:0 0 4px 0;">🔧 Amministrazione</h2>
-                <p>Inserisci il PIN per accedere a backup ed eliminazione corsi.</p>
+                <p>Inserisci il ${_adminPinFase === 1 ? 'primo' : 'secondo'} PIN (${_adminPinFase}/2).</p>
+                <p style="font-size:10.5px; color:#a83232; margin-top:-4px;">Attenzione: un PIN sbagliato blocca immediatamente questo dispositivo dall'intero programma.</p>
                 <input type="password" id="admin-pin" placeholder="PIN" autocomplete="off">
                 <button id="admin-pin-btn">Entra</button>
                 <div class="login-note"><span id="admin-back" style="text-decoration:underline; cursor:pointer;">← torna al login</span></div>
@@ -1587,12 +1700,28 @@
         document.getElementById('admin-back').addEventListener('click', () => renderCorsoSelect());
         const btn = document.getElementById('admin-pin-btn');
         const input = document.getElementById('admin-pin');
-        const check = () => {
-            if (input.value === ADMIN_PIN)
-                renderAdminPanel();
-            else {
+        const check = async () => {
+            const pinAtteso = _adminPinFase === 1 ? ADMIN_PIN_1 : ADMIN_PIN_2;
+            if (input.value === pinAtteso) {
+                if (_adminPinFase === 1) {
+                    _adminPinFase = 2;
+                    _renderAdminPinInterno();
+                }
+                else {
+                    await segnaDispositivoFidato();
+                    renderAdminPanel();
+                }
+            } else if (await dispositivoFidato()) {
+                // Dispositivo già autenticato con successo in passato: solo respinto, niente ban
+                // (protegge il formatore da un ban per un semplice errore di battitura).
                 input.style.borderColor = '#a83232';
                 input.value = '';
+                input.placeholder = 'PIN errato, riprova';
+            } else {
+                // Dispositivo mai autenticato con successo prima d'ora: PIN sbagliato → ban immediato.
+                await bannaDispositivoCorrente('PIN Amministrazione errato (fase ' + _adminPinFase + ')');
+                const ban = await dispositivoBannato();
+                renderDispositivoBannato(ban);
             }
         };
         btn.addEventListener('click', check);
@@ -1686,6 +1815,7 @@
         const corsiRegistrati = await loadList('corsiRegistrati', true);
         const logPersistente = await _diagLeggiPersistente();
         const logPersistenteRecenti = logPersistente.slice(-15).reverse();
+        const dispositiviBannati = await elencoDispositiviBannati();
 
         app.innerHTML = `
             <div class="login-overlay">
@@ -1724,6 +1854,16 @@
                 ${adminMsg ? `<p style="font-size:11px; color:${adminMsg.startsWith('Errore') ? '#a83232' : '#1a6b2e'}; margin-top:10px;">${adminMsg}</p>` : ''}
 
                 <div style="border:1px solid #d4d0c0; padding:10px; margin:14px 0 0 0; text-align:left;">
+                  <strong style="font-size:12px;">⛔ Dispositivi bannati (${dispositiviBannati.length})</strong>
+                  ${dispositiviBannati.length === 0 ? '<p style="font-size:10.5px; color:#8a8a80; margin:6px 0 0 0;">Nessun dispositivo bannato al momento.</p>' : dispositiviBannati.map(d => `
+                      <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid #eee;">
+                        <span style="font-size:10.5px;">${d.motivo || 'motivo non specificato'} — ${d.quando || ''} <span style="color:#8a8a80;">(${d.id.slice(0, 18)}…)</span></span>
+                        <span class="print-btn sblocca-dispositivo-btn" data-id="${d.id}" style="cursor:pointer; color:#1a6b2e; text-decoration:underline; font-size:10.5px;">sblocca</span>
+                      </div>
+                    `).join('')}
+                </div>
+
+                <div style="border:1px solid #d4d0c0; padding:10px; margin:14px 0 0 0; text-align:left;">
                   <strong style="font-size:12px;">🩺 Diagnostica storage (questa sessione/dispositivo)</strong>
                   <p style="font-size:10.5px; margin:6px 0 0 0;">Backend condiviso configurato: <strong style="color:${STORAGE_CONFIGURATO ? '#1a6b2e' : '#a83232'};">${STORAGE_CONFIGURATO ? 'sì' : 'NO — incolla l\'URL Apps Script nel codice'}</strong></p>
                   <p style="font-size:10.5px; margin:4px 0 0 0;">Scritture riuscite: <strong>${_diagScrittureOk}</strong> &nbsp;|&nbsp; Scritture fallite: <strong style="color:${_diagScrittureFallite ? '#a83232' : 'inherit'};">${_diagScrittureFallite}</strong></p>
@@ -1751,6 +1891,13 @@
             adminCorsoValue = '';
             adminNuovoCorsoValue = '';
             renderCorsoSelect();
+        });
+        document.querySelectorAll('.sblocca-dispositivo-btn').forEach(el => {
+            el.addEventListener('click', async () => {
+                await sbloccaDispositivo(el.dataset.id);
+                adminMsg = 'Dispositivo sbloccato.';
+                renderAdminPanel();
+            });
         });
         const diagCopiaBtn = document.getElementById('admin-diag-copia');
         if (diagCopiaBtn)
@@ -1984,7 +2131,7 @@
             CO15: "CO15: Conferma ordine di produzione",
             CR01: "CR01: Crea linea di produzione",
             C223: "C223: Versione di produzione (assegna prodotto a linea)",
-            ASSOCMF: "Associazione materiale → fornitore",
+            ASSOCMF: "ZMF01: Associazione materiale → fornitore",
             ME51N: "ME51N: Crea richiesta d'acquisto",
             ME21N: "ME21N: Crea ordine d'acquisto",
             MIGO: "MIGO: Ricevimento merce",
@@ -2041,7 +2188,7 @@
                   <div class="sidebar-header">★ Menu utente</div>
                   <div class="tree">${buildTreeHTML([buildFavoritesNode(), ...MENU], 0, treeOpenState, '')}</div>
                 </div>
-                <div id="screen-content" style="flex:1; display:flex; flex-direction:column; overflow:hidden;"></div>
+                <div id="screen-content" style="flex:1; display:flex; flex-direction:column; overflow:hidden; min-height:0;"></div>
               </div>
               <div class="statusbar">
                 <span class="${statusIsErr ? 'msg-err' : 'msg-ok'}">${statusMsg}</span>
@@ -2177,20 +2324,33 @@
     }
 
     // ============ HELPERS DI DOMINIO ============
-    function nextOVNumber() {
-        return 'OV-' + String(ordiniVendita.length + 1).padStart(4, '0');
-    }
-    function nextOPNumber() {
-        return 'OP-' + String(ordiniProduzione.length + 1).padStart(4, '0');
-    }
-    function nextPRNumber() {
-        return 'RA-' + String(richiesteAcquisto.length + 1).padStart(4, '0');
-    }
-    function nextPONumber() {
-        return 'OA-' + String(ordiniAcquisto.length + 1).padStart(4, '0');
-    }
-    function nextDDTNumber() {
-        return 'DDT-' + String(consegne.length + 1).padStart(4, '0');
+    // Genera il numero successivo per un tipo di documento (OV, OA, RA, OP, DDT) in modo
+    // ATOMICO lato server: Firebase incrementa il contatore e restituisce il nuovo valore in
+    // un'unica operazione, quindi due scritture quasi simultanee non possono mai produrre
+    // lo stesso numero (il vecchio schema "conta quanti ce ne sono e aggiungi 1" invece sì).
+    async function prossimoNumero(prefisso) {
+        if (!STORAGE_CONFIGURATO)
+            return prefisso + '-' + String(Date.now()).slice(-4);
+        try {
+            const chiave = corsoKey('contatori::' + prefisso);
+            const url = FIREBASE_URL + '/storage/' + encodeURIComponent(chiave) + '.json';
+            const res = await fetch(url, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    '.sv': {
+                        increment: 1
+                    }
+                })
+            });
+            const nuovoValore = await res.json();
+            return prefisso + '-' + String(nuovoValore).padStart(4, '0');
+        } catch (e) {
+            // Ripiego raro (rete assente): un numero comunque univoco per sessione, meglio di un duplicato certo.
+            return prefisso + '-' + String(Date.now()).slice(-4);
+        }
     }
     function getBOM(codiceProdotto) {
         return distinte.find(d => d.prodotto === codiceProdotto);
@@ -2220,6 +2380,14 @@
     function materialeLabel(codice) {
         const m = materiali.find(m => m.codice === codice);
         return m ? `${codice} - ${m.descrizione}` : codice;
+    }
+    function fornitoreLabel(codice) {
+        const f = fornitori.find(f => f.codice === codice);
+        return f ? `${codice} - ${f.ragioneSociale}` : codice;
+    }
+    function clienteLabel(codice) {
+        const c = clienti.find(c => c.codice === codice);
+        return c ? `${codice} - ${c.ragioneSociale}` : codice;
     }
 
     // ============ STAMPA DOCUMENTI (a video / PDF tramite stampa del browser) ============
@@ -2372,7 +2540,7 @@
             <div class="tablewrap">
               <table>
                 <thead><tr><th>N. ordine</th><th>Cliente</th><th>Rif. cliente</th><th>Pos.</th><th>Prodotto</th><th>Quantità</th><th>Data richiesta</th><th>Stato</th><th>Creato da</th><th>Azioni</th></tr></thead>
-                <tbody>${ordiniVendita.length === 0 ? '<tr><td colspan="10" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun ordine di vendita.</td></tr>' : ordiniVendita.flatMap(o => {const haConsegne = consegne.some(c => c.ordineVendita === o.numero);return o.righe.map((r, i) => `<tr><td>${o.numero}</td><td>${o.cliente}</td><td>${o.riferimentoCliente || '-'}</td><td>${String((i + 1) * 10).padStart(4, '0')}</td><td>${r.prodotto}</td><td>${r.quantita}</td><td>${r.dataRichiesta}</td><td>${semaforoStatoOrdine(o.stato)}</td><td>${o.creatoDa}</td><td>${i === 0 ? deleteActionCell('ov-' + o.numero, haConsegne ? 'ha consegne, non eliminabile' : null) : ''}</td></tr>`);}).join('')}
+                <tbody>${ordiniVendita.length === 0 ? '<tr><td colspan="10" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun ordine di vendita.</td></tr>' : ordiniVendita.flatMap(o => {const haConsegne = consegne.some(c => c.ordineVendita === o.numero);return o.righe.map((r, i) => `<tr><td>${o.numero}</td><td>${clienteLabel(o.cliente)}</td><td>${o.riferimentoCliente || '-'}</td><td>${String((i + 1) * 10).padStart(4, '0')}</td><td>${materialeLabel(r.prodotto)}</td><td>${r.quantita}</td><td>${r.dataRichiesta}</td><td>${semaforoStatoOrdine(o.stato)}</td><td>${o.creatoDa}</td><td>${i === 0 ? deleteActionCell('ov-' + o.numero, haConsegne ? 'ha consegne, non eliminabile' : null) : ''}</td></tr>`);}).join('')}
                 </tbody>
               </table>
             </div>
@@ -2439,7 +2607,7 @@
             const fresca = await loadList('ordiniVendita');
             const {out} = normalizzaOrdiniVendita(fresca);
             const rec = {
-                numero: 'OV-' + String(out.length + 1).padStart(4, '0'),
+                numero: await prossimoNumero('OV'),
                 cliente: draftOV.cliente,
                 riferimentoCliente: draftOV.riferimentoCliente || '',
                 stato: 'aperto',
@@ -2489,6 +2657,36 @@
     function pianificatoApertoPer(codice) {
         return ordiniProduzione.filter(o => o.prodotto === codice && o.stato === 'aperto').reduce((s, o) => s + o.quantita, 0);
     }
+    // ---- "In uscita": quanto di questo materiale è già impegnato da ordini aperti, in due forme:
+    // come componente di un ordine di produzione non ancora confermato, o come prodotto venduto
+    // non ancora consegnato del tutto. Serve per la giacenza proiettata di MMBE.
+    function consumoProduzioneApertoPer(codice) {
+        let tot = 0;
+        ordiniProduzione.forEach(o => {
+            if (o.stato !== 'aperto')
+                return;
+            (o.componenti || []).forEach(c => {
+                if (c.codice === codice)
+                    tot += Number(c.qtaTotale) || 0;
+            });
+        });
+        return tot;
+    }
+    function venditeAperteApertoPer(codice) {
+        let tot = 0;
+        ordiniVendita.forEach(o => {
+            if (o.stato === 'evaso')
+                return;
+            (o.righe || []).forEach(r => {
+                if (r.prodotto === codice) {
+                    const residuo = Number(r.quantita) - Number(r.consegnato || 0);
+                    if (residuo > 0)
+                        tot += residuo;
+                }
+            });
+        });
+        return tot;
+    }
 
     // ---- Bucket settimanali (lun-dom), stile matrice SAP MF50 ----
     function mondayOf(date) {
@@ -2513,20 +2711,56 @@
         const diff = target - firstThursday;
         return 1 + Math.round(diff / (7 * 24 * 60 * 60 * 1000));
     }
+    // Festività italiane fisse (le mobili, Pasqua e Pasquetta, si calcolano a parte più sotto).
+    const FESTIVITA_FISSE_MMGG = ['01-01', '01-06', '04-25', '05-01', '06-02', '08-15', '11-01', '12-08', '12-25', '12-26'];
+    function pasquaDiPasquetta(anno) {
+        // Algoritmo di Gauss per la domenica di Pasqua; Pasquetta è il giorno dopo.
+        const a = anno % 19,
+            b = Math.floor(anno / 100),
+            c = anno % 100;
+        const d = Math.floor(b / 4),
+            e = b % 4,
+            f = Math.floor((b + 8) / 25),
+            g = Math.floor((b - f + 1) / 3);
+        const h = (19 * a + b - d - g + 15) % 30,
+            i = Math.floor(c / 4),
+            k = c % 4;
+        const l = (32 + 2 * e + 2 * i - h - k) % 7,
+            m = Math.floor((a + 11 * h + 22 * l) / 451);
+        const mese = Math.floor((h + l - 7 * m + 114) / 31),
+            giorno = ((h + l - 7 * m + 114) % 31) + 1;
+        const pasqua = new Date(anno, mese - 1, giorno);
+        const pasquetta = new Date(pasqua);
+        pasquetta.setDate(pasqua.getDate() + 1);
+        return [isoDate(pasqua), isoDate(pasquetta)];
+    }
+    function isFestivo(d) {
+        const mmgg = String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        if (FESTIVITA_FISSE_MMGG.includes(mmgg))
+            return true;
+        return pasquaDiPasquetta(d.getFullYear()).includes(isoDate(d));
+    }
+    function isWeekendOFestivo(d) {
+        return d.getDay() === 0 || d.getDay() === 6 || isFestivo(d);
+    }
     function generateWeekBuckets(nGiorni=14, nSettimaneDopo=8) {
         const buckets = [];
         const oggi = new Date();
         oggi.setHours(0, 0, 0, 0);
+        const inizio = mondayOf(oggi); // la vista giornaliera parte SEMPRE dal lunedì della settimana corrente
         for (let i = 0; i < nGiorni; i++) {
-            const d = new Date(oggi);
+            const d = new Date(inizio);
             d.setDate(d.getDate() + i);
+            const nomeGiorno = ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab'][d.getDay()];
             buckets.push({
-                label: fmtGG_MM(d),
+                label: nomeGiorno + ' ' + fmtGG_MM(d),
                 startISO: isoDate(d),
-                endISO: isoDate(d)
+                endISO: isoDate(d),
+                speciale: isWeekendOFestivo(d),
+                oggi: isoDate(d) === isoDate(oggi)
             });
         }
-        const cursor = new Date(oggi);
+        const cursor = new Date(inizio);
         cursor.setDate(cursor.getDate() + nGiorni);
         for (let i = 0; i < nSettimaneDopo; i++) {
             const s = new Date(cursor);
@@ -2536,7 +2770,9 @@
             buckets.push({
                 label: `S${weekNumber(s)} (${fmtGG_MM(s)})`,
                 startISO: isoDate(s),
-                endISO: isoDate(e)
+                endISO: isoDate(e),
+                speciale: false,
+                oggi: false
             });
         }
         return buckets;
@@ -2610,17 +2846,18 @@
                 });
                 const infoLinea = lineeProduzione.find(l => l.codice === lineaKey);
                 const nomeLinea = lineaKey === '(non assegnata)' ? '(non assegnata)' : (infoLinea ? `${lineaKey} - ${infoLinea.descrizione}` : lineaKey);
+                const capacitaMax = infoLinea ? Number(infoLinea.capacitaMax) || 0 : 0;
                 const righeCodici = Object.entries(perCodice).map(([cod, arr]) =>
-                `<tr><td style="padding-left:14px; color:#3a5a8c;">↳ ${cod}</td>${arr.map(v => `<td style="text-align:center; font-size:10.5px;">${v || ''}</td>`).join('')}</tr>`
+                `<tr><td style="padding-left:14px; color:#3a5a8c;">↳ ${materialeLabel(cod)}</td>${arr.map(v => `<td style="text-align:center; font-size:10.5px;">${v || ''}</td>`).join('')}</tr>`
                 ).join('');
 
                 return `
                         <div style="margin:0 0 10px 0;">
                           <div class="tablewrap" style="margin:0; overflow-x:auto;">
                             <table style="min-width:${140 + buckets.length * 52}px;">
-                              <thead><tr><th style="min-width:150px;">${nomeLinea}</th>${buckets.map(b => `<th style="text-align:center; min-width:48px; font-size:10px;">${b.label}</th>`).join('')}</tr></thead>
+                              <thead><tr><th style="min-width:150px;">${nomeLinea}${capacitaMax > 0 ? ` <span style="font-weight:400; font-size:9.5px; color:#5a6470;">(max ${capacitaMax}/g)</span>` : ''}</th>${buckets.map(b => `<th style="text-align:center; min-width:48px; font-size:10px; ${b.speciale ? 'color:#a83232; background:#fbeaea;' : ''} ${b.oggi ? 'text-decoration:underline;' : ''}">${b.label}</th>`).join('')}</tr></thead>
                               <tbody>
-                                <tr style="background:#f4f4ee; font-weight:600;"><td>Totale linea</td>${totalePerBucket.map(v => `<td style="text-align:center;">${v || 0}</td>`).join('')}</tr>
+                                <tr style="background:#f4f4ee; font-weight:600;"><td>Totale linea</td>${totalePerBucket.map((v, i) => {const sopraCapacita = capacitaMax > 0 && v > capacitaMax && !buckets[i].label.startsWith('S');return `<td style="text-align:center; ${sopraCapacita ? 'color:#a83232; background:#fbeaea;' : ''}" ${sopraCapacita ? `title="Supera la capacità massima della linea (${capacitaMax}/giorno)"` : ''}>${v || 0}${sopraCapacita ? ' ⚠' : ''}</td>`;}).join('')}</tr>
                                 ${righeCodici || '<tr><td colspan="' + (buckets.length + 1) + '" style="text-align:center;color:#9a9a8f;font-size:10.5px;padding:4px;">Nessun ordine pianificato su questa linea.</td></tr>'}
                               </tbody>
                             </table>
@@ -2706,7 +2943,7 @@
                     <div class="tablewrap" style="margin:0; overflow-x:auto;">
                       <table style="min-width:${140 + buckets.length * 60}px;">
                         <thead>
-                          <tr><th style="min-width:150px;">Dato</th>${buckets.map(b => `<th style="text-align:center; min-width:56px; font-size:10px;">${b.label}</th>`).join('')}</tr>
+                          <tr><th style="min-width:150px;">Dato</th>${buckets.map(b => `<th style="text-align:center; min-width:56px; font-size:10px; ${b.speciale ? 'color:#a83232; background:#fbeaea;' : ''} ${b.oggi ? 'text-decoration:underline;' : ''}">${b.label}</th>`).join('')}</tr>
                         </thead>
                         <tbody>
                           <tr style="background:#f4f4ee;"><td>Giacenza proiettata</td>${giacenzaProiettata.map(v => `<td class="proiezione-cell" style="text-align:center; font-weight:600; color:${v < 0 ? '#a83232' : '#1a6b2e'};">${v}</td>`).join('')}</tr>
@@ -2796,7 +3033,7 @@
                 const opFreschi = await loadList('ordiniProduzione');
                 ordiniProduzione = opFreschi;
 
-                lineeRiga.forEach(l => {
+                for (const l of lineeRiga) {
                     const key = l || '_';
                     const baseline = existingPlanPerWeek(prodotto, l);
                     for (let i = 0; i < buckets.length; i++) {
@@ -2807,7 +3044,7 @@
                         const delta = current - baseline[i];
                         if (delta > 0) {
                             const rec = {
-                                numero: 'OP-' + String(opFreschi.length + 1 + creati.length).padStart(4, '0'),
+                                numero: await prossimoNumero('OP'),
                                 prodotto,
                                 quantita: delta,
                                 origine: 'MF50/MRP (piano settimanale)',
@@ -2828,7 +3065,7 @@
                         }
                         delete mf50CellDraft[cellKey];
                     }
-                });
+                }
 
                 if (creati.length === 0) {
                     setStatus('Nessuna nuova quantità pianificata da confermare per questo prodotto.', true);
@@ -2853,12 +3090,13 @@
               <div class="formgrid">
                 <label>Codice linea</label><input id="f-codice" value="${draftLinea.codice}" placeholder="es. LINEA-1">
                 <label>Descrizione</label><input id="f-desc" value="${draftLinea.descrizione}" placeholder="es. Linea assemblaggio A">
+                <label>Capacità massima/giorno</label><input id="f-capacita" type="number" min="0" value="${draftLinea.capacitaMax || ''}" placeholder="es. 500 (facoltativo, 0 o vuoto = nessun limite)">
               </div>
             </div>
             <div class="tablewrap">
               <table>
-                <thead><tr><th>Codice</th><th>Descrizione</th><th>Creato da</th><th>Azioni</th></tr></thead>
-                <tbody>${lineeProduzione.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna linea definita.</td></tr>' : lineeProduzione.map(l => `<tr><td>${l.codice}</td><td>${l.descrizione}</td><td>${l.creatoDa}</td><td>${deleteActionCell('lin-' + l.codice)}</td></tr>`).join('')}
+                <thead><tr><th>Codice</th><th>Descrizione</th><th>Capacità max/giorno</th><th>Creato da</th><th>Azioni</th></tr></thead>
+                <tbody>${lineeProduzione.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna linea definita.</td></tr>' : lineeProduzione.map(l => `<tr><td>${l.codice}</td><td>${l.descrizione}</td><td style="text-align:center;">${l.capacitaMax || '—'}</td><td>${l.creatoDa}</td><td>${deleteActionCell('lin-' + l.codice)}</td></tr>`).join('')}
                 </tbody>
               </table>
               <p style="font-size:10px; color:#8a8a80; padding:6px 8px;">Eliminando una linea vengono rimosse anche le assegnazioni prodotto→linea collegate.</p>
@@ -2882,6 +3120,7 @@
         });
         document.getElementById('f-codice').addEventListener('input', e => draftLinea.codice = e.target.value);
         document.getElementById('f-desc').addEventListener('input', e => draftLinea.descrizione = e.target.value);
+        document.getElementById('f-capacita').addEventListener('input', e => draftLinea.capacitaMax = e.target.value);
         document.getElementById('save-cr01').addEventListener('click', () => withGuard(async () => {
             if (!draftLinea.codice.trim() || !draftLinea.descrizione.trim()) {
                 setStatus('Codice e descrizione sono obbligatori.', true);
@@ -2896,6 +3135,7 @@
             const rec = {
                 codice,
                 descrizione: draftLinea.descrizione.trim(),
+                capacitaMax: Number(draftLinea.capacitaMax) || 0,
                 creatoDa: currentUser,
                 creatoIl: nowStr()
             };
@@ -2903,7 +3143,8 @@
             lineeProduzione.push(rec);
             draftLinea = {
                 codice: "",
-                descrizione: ""
+                descrizione: "",
+                capacitaMax: ""
             };
             setStatus(`Linea ${rec.codice} creata con successo.`);
             renderMain();
@@ -2942,7 +3183,7 @@
             <div class="tablewrap">
               <table>
                 <thead><tr><th>Prodotto</th><th>Linea</th><th>Creato da</th><th>Azioni</th></tr></thead>
-                <tbody>${assegnazioni.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna assegnazione.</td></tr>' : assegnazioni.map((a, i) => `<tr><td>${a.prodotto}</td><td>${a.linea}</td><td>${a.creatoDa || '-'}</td><td>${deleteActionCell('asg-' + i)}</td></tr>`).join('')}
+                <tbody>${assegnazioni.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna assegnazione.</td></tr>' : assegnazioni.map((a, i) => `<tr><td>${materialeLabel(a.prodotto)}</td><td>${a.linea}</td><td>${a.creatoDa || '-'}</td><td>${deleteActionCell('asg-' + i)}</td></tr>`).join('')}
                 </tbody>
               </table>
             </div>
@@ -3013,19 +3254,16 @@
               </div>
               ${fornitori.length === 0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun fornitore in anagrafica: crearlo prima in XK01.</p>' :
         `<div style="margin-top:10px;">
-                  <span style="font-size:11.5px; display:block; margin-bottom:6px;">Fornitori abituali (selezionabili più di uno, es. due viterie diverse):</span>
-                  ${fornitori.map(f => `
-                    <label style="display:inline-flex; align-items:center; gap:4px; margin-right:16px; margin-bottom:4px; font-size:11.5px; font-weight:400; text-align:left;">
-                      <input type="checkbox" class="forn-check" value="${f.codice}" ${fornSelezionati.includes(f.codice) ? 'checked' : ''}>
-                      ${f.codice} - ${f.ragioneSociale}
-                    </label>
-                  `).join('')}
+                  <label style="font-size:11.5px; display:block; margin-bottom:6px;">Fornitori abituali (tieni premuto Cmd/Ctrl per selezionarne più di uno, es. due viterie diverse):</label>
+                  <select id="f-fornitori-multi" multiple size="${Math.min(fornitori.length, 6)}" style="width:100%; font-size:11.5px; padding:4px;">
+                    ${fornitori.map(f => `<option value="${f.codice}" ${fornSelezionati.includes(f.codice) ? 'selected' : ''}>${f.codice} - ${f.ragioneSociale}</option>`).join('')}
+                  </select>
                 </div>`}
             </div>
             <div class="tablewrap">
               <table>
                 <thead><tr><th>Materiale</th><th>Fornitore</th><th>Creato da</th><th>Azioni</th></tr></thead>
-                <tbody>${fornitoriMateriale.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna associazione. Senza associazione, un materiale può essere ordinato da qualsiasi fornitore.</td></tr>' : fornitoriMateriale.map((a, i) => `<tr><td>${a.materiale}</td><td>${a.fornitore}</td><td>${a.creatoDa || '-'}</td><td>${deleteActionCell('fm-' + i)}</td></tr>`).join('')}
+                <tbody>${fornitoriMateriale.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna associazione. Senza associazione, un materiale può essere ordinato da qualsiasi fornitore.</td></tr>' : fornitoriMateriale.map((a, i) => `<tr><td>${materialeLabel(a.materiale)}</td><td>${fornitoreLabel(a.fornitore)}</td><td>${a.creatoDa || '-'}</td><td>${deleteActionCell('fm-' + i)}</td></tr>`).join('')}
                 </tbody>
               </table>
             </div>
@@ -3047,11 +3285,11 @@
             draftAssocMatFor.fornitori = fornitoriMateriale.filter(a => a.materiale === e.target.value).map(a => a.fornitore);
             renderScreenContent();
         });
-        document.querySelectorAll('.forn-check').forEach(cb => {
-            cb.addEventListener('change', () => {
-                draftAssocMatFor.fornitori = [...document.querySelectorAll('.forn-check:checked')].map(c => c.value);
+        const selMulti = document.getElementById('f-fornitori-multi');
+        if (selMulti)
+            selMulti.addEventListener('change', () => {
+                draftAssocMatFor.fornitori = [...selMulti.selectedOptions].map(o => o.value);
             });
-        });
         document.getElementById('save-assocmf').addEventListener('click', () => withGuard(async () => {
             if (!draftAssocMatFor.materiale) {
                 setStatus('Seleziona un materiale.', true);
@@ -3167,7 +3405,7 @@
                           </div>
                           <div class="tablewrap" style="margin:0; overflow-x:auto;">
                             <table style="min-width:${140 + buckets.length * 52}px;">
-                              <thead><tr><th style="min-width:150px;">Dato</th>${buckets.map(b => `<th style="text-align:center; min-width:48px; font-size:10px;">${b.label}</th>`).join('')}</tr></thead>
+                              <thead><tr><th style="min-width:150px;">Dato</th>${buckets.map(b => `<th style="text-align:center; min-width:48px; font-size:10px; ${b.speciale ? 'color:#a83232; background:#fbeaea;' : ''} ${b.oggi ? 'text-decoration:underline;' : ''}">${b.label}</th>`).join('')}</tr></thead>
                               <tbody>
                                 <tr style="background:#f4f4ee;"><td>Giacenza proiettata</td>${proiezione.map(v => `<td class="proiezione-md01-cell" style="text-align:center; font-weight:600; color:${v < 0 ? '#a83232' : '#1a6b2e'};">${v}</td>`).join('')}</tr>
                                 <tr><td>Fabbisogno lordo (ODP)</td>${dati.lordo.map(v => `<td style="text-align:center; font-size:10.5px;">${v || ''}</td>`).join('')}</tr>
@@ -3226,7 +3464,7 @@
                     const qta = Number(mdCellDraft[key]) || 0;
                     if (qta > 0) {
                         const rec = {
-                            numero: 'RA-' + String(richiesteAcquisto.length + 1 + creati.length).padStart(4, '0'),
+                            numero: await prossimoNumero('RA'),
                             materiale,
                             quantita: qta,
                             dataRichiesta: buckets[i].startISO,
@@ -3289,7 +3527,7 @@
             const qta = Number(draftCO01.quantita);
             ordiniProduzione = await loadList('ordiniProduzione');
             const rec = {
-                numero: 'OP-' + String(ordiniProduzione.length + 1).padStart(4, '0'),
+                numero: await prossimoNumero('OP'),
                 prodotto: draftCO01.prodotto,
                 quantita: qta,
                 origine: 'Manuale (CO01)',
@@ -3326,7 +3564,7 @@
                 <tbody>
                   ${ordiniProduzione.length === 0 ? '<tr><td colspan="11" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun ordine di produzione.</td></tr>' : ordiniProduzione.map(o => `
                       <tr>
-                        <td>${o.numero}</td><td>${o.prodotto}</td><td>${o.quantita}</td><td>${o.linea || '-'}</td><td>${o.dataPianificata || '-'}</td><td>${o.origine}</td>
+                        <td>${o.numero}</td><td>${materialeLabel(o.prodotto)}</td><td>${o.quantita}</td><td>${o.linea || '-'}</td><td>${o.dataPianificata || '-'}</td><td>${o.origine}</td>
                         <td>${semaforoStatoOrdine(o.stato)}</td>
                         <td>${o.creatoDa}</td><td>${o.confermatoDa || '-'}</td>
                         <td><span class="print-btn stampa-op" data-numero="${o.numero}">🖶 stampa</span></td>
@@ -3366,7 +3604,7 @@
                 <tbody>
                   ${aperti.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun ordine di produzione aperto da evadere.</td></tr>' : aperti.map(o => `
                       <tr>
-                        <td>${o.numero}</td><td>${o.prodotto}</td><td>${o.quantita}</td>
+                        <td>${o.numero}</td><td>${materialeLabel(o.prodotto)}</td><td>${o.quantita}</td>
                         <td style="font-size:10.5px;">${o.componenti.map(c => c.codice + ' x' + c.qtaTotale + ' (in OFFICINA: ' + getGiacenzaLoc(c.codice, 'OFFICINA') + ')').join(', ')}</td>
                         <td><button class="actionbtn conferma-op" data-numero="${o.numero}" style="padding:3px 8px; font-size:10.5px;">✔ Conferma (CO15)</button></td>
                       </tr>
@@ -3462,7 +3700,7 @@
             }
             richiesteAcquisto = await loadList('richiesteAcquisto');
             const rec = {
-                numero: 'RA-' + String(richiesteAcquisto.length + 1).padStart(4, '0'),
+                numero: await prossimoNumero('RA'),
                 materiale: draftPR.materiale,
                 quantita: Number(draftPR.quantita),
                 dataRichiesta: draftPR.dataRichiesta,
@@ -3498,9 +3736,20 @@
         function fornitoriAbitualiDi(materiale) {
             return fornitoriMateriale.filter(a => a.materiale === materiale).map(a => a.fornitore);
         }
+        // Quante unità di questo materiale sono già in un ordine d'acquisto aperto (non ancora ricevuto)?
+        // Serve a evitare doppi ordini involontari per lo stesso materiale da richieste diverse.
+        function quantitaGiaOrdinata(materiale) {
+            let tot = 0;
+            ordiniAcquisto.forEach(o => o.righe.forEach(r => {
+                if (r.materiale === materiale && !r.ricevuto)
+                    tot += Number(r.quantita) || 0;
+            }));
+            return tot;
+        }
 
         function rigaPRHTML(r) {
             const abituali = fornitoriAbitualiDi(r.materiale);
+            const giaOrdinata = quantitaGiaOrdinata(r.materiale);
             return `
                   <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px; padding:4px; border:1px solid #e0ddce; flex-wrap:wrap;">
                     <input type="checkbox" class="pr-check" data-numero="${r.numero}" ${draftPO.selezionate[r.numero].checked ? 'checked' : ''}>
@@ -3510,6 +3759,7 @@
                     <label style="font-size:10.5px; color:#5a6470;">Data consegna</label>
                     <input type="date" class="pr-consegna" data-numero="${r.numero}" value="${draftPO.selezionate[r.numero].dataConsegna}" style="font-size:11px; padding:2px; border:1px solid #7f9db9;">
                     ${abituali.length > 0 ? `<span style="font-size:10px; color:#8a8a80;">(fornitori abituali: ${abituali.join(', ')})</span>` : ''}
+                    ${giaOrdinata > 0 ? `<span style="font-size:10px; color:#a86a1a; font-weight:bold;">⚠ già ${giaOrdinata} in ordine aperto</span>` : `<span style="font-size:10px; color:#1a6b2e;">nessun ordine aperto su questo materiale</span>`}
                   </div>`;
         }
 
@@ -3559,7 +3809,7 @@
             <div class="tablewrap">
               <table>
                 <thead><tr><th>N. ordine</th><th>Fornitore</th><th>Materiale</th><th>Quantità</th><th>Prezzo unit.</th><th>Data consegna</th><th>Stato</th><th>Creato da</th><th>Stampa</th></tr></thead>
-                <tbody>${ordiniAcquisto.length === 0 ? '<tr><td colspan="9" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun ordine d\'acquisto.</td></tr>' : ordiniAcquisto.flatMap(o => o.righe.map((r, i) => `<tr><td>${o.numero}</td><td>${o.fornitore}</td><td>${materialeLabel(r.materiale)}</td><td>${r.quantita}</td><td>${r.prezzoUnitario}</td><td>${r.dataConsegna}</td><td>${semaforoStatoOrdine(r.ricevuto ? 'ricevuto' : 'aperto')}</td><td>${o.creatoDa}</td><td>${i === 0 ? `<span class="print-btn stampa-oa" data-numero="${o.numero}">🖶 stampa</span>` : ''}</td></tr>`)).join('')}
+                <tbody>${ordiniAcquisto.length === 0 ? '<tr><td colspan="9" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun ordine d\'acquisto.</td></tr>' : ordiniAcquisto.flatMap(o => o.righe.map((r, i) => `<tr><td>${o.numero}</td><td>${fornitoreLabel(o.fornitore)}</td><td>${materialeLabel(r.materiale)}</td><td>${r.quantita}</td><td>${r.prezzoUnitario}</td><td>${r.dataConsegna}</td><td>${semaforoStatoOrdine(r.ricevuto ? 'ricevuto' : 'aperto')}</td><td>${o.creatoDa}</td><td>${i === 0 ? `<span class="print-btn stampa-oa" data-numero="${o.numero}">🖶 stampa</span>` : ''}</td></tr>`)).join('')}
                 </tbody>
               </table>
             </div>
@@ -3617,7 +3867,7 @@
             }));
             const ordiniFreschi = await loadList('ordiniAcquisto');
             const rec = {
-                numero: 'OA-' + String(ordiniFreschi.length + 1).padStart(4, '0'),
+                numero: await prossimoNumero('OA'),
                 fornitore: draftPO.fornitore,
                 righe,
                 stato: 'aperto',
@@ -3681,7 +3931,7 @@
                 <tbody>${righeAperte.length === 0 ? '<tr><td colspan="8" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna riga da ricevere.</td></tr>' : righeAperte.map(r => {const key = `${r.ordine}::${r.indice}`;const scaduto = r.dataConsegna && r.dataConsegna < isoDate(new Date());return `
                         <tr>
                           <td>${semaforo(scaduto ? 'rosso' : 'giallo', scaduto ? 'in ritardo' : 'in attesa')}</td>
-                          <td>${r.ordine}</td><td>${r.fornitore}</td><td>${materialeLabel(r.materiale)}</td><td>${r.quantita}</td><td>${r.dataConsegna}</td>
+                          <td>${r.ordine}</td><td>${fornitoreLabel(r.fornitore)}</td><td>${materialeLabel(r.materiale)}</td><td>${r.quantita}</td><td>${r.dataConsegna}</td>
                           <td><input type="text" class="ddt-input" data-key="${key}" value="${draftDDT[key] || ''}" placeholder="es. DDT-4521" style="width:100px; font-size:11px; padding:3px; border:1px solid #7f9db9;"></td>
                           <td><button class="actionbtn ricevi-riga" data-ordine="${r.ordine}" data-indice="${r.indice}" style="padding:3px 8px; font-size:10.5px;">✔ Ricevi (MIGO)</button></td>
                         </tr>`;}).join('')}
@@ -3693,7 +3943,7 @@
               <div class="tablewrap" style="margin-top:6px;">
                 <table>
                   <thead><tr><th>Stato</th><th>N. ordine</th><th>Fornitore</th><th>Materiale</th><th>Quantità</th><th>N. DDT fornitore</th><th>Data ricevimento</th><th>Ricevuto da</th><th>Stampa</th></tr></thead>
-                  <tbody>${righeRicevute.length === 0 ? '<tr><td colspan="9" style="text-align:center;color:#9a9a8f;padding:10px;">Nessun ricevimento ancora registrato.</td></tr>' : righeRicevute.map(r => `<tr><td>${semaforo('verde', 'ricevuto')}</td><td>${r.ordine}</td><td>${r.fornitore}</td><td>${materialeLabel(r.materiale)}</td><td>${r.quantita}</td><td>${r.ddtFornitore || '-'}</td><td>${r.dataRicevimento || '-'}</td><td>${r.ricevutoDa || '-'}</td><td><span class="print-btn stampa-ric" data-ordine="${r.ordine}" data-indice="${r.indice}">🖶 stampa</span></td></tr>`).join('')}
+                  <tbody>${righeRicevute.length === 0 ? '<tr><td colspan="9" style="text-align:center;color:#9a9a8f;padding:10px;">Nessun ricevimento ancora registrato.</td></tr>' : righeRicevute.map(r => `<tr><td>${semaforo('verde', 'ricevuto')}</td><td>${r.ordine}</td><td>${fornitoreLabel(r.fornitore)}</td><td>${materialeLabel(r.materiale)}</td><td>${r.quantita}</td><td>${r.ddtFornitore || '-'}</td><td>${r.dataRicevimento || '-'}</td><td>${r.ricevutoDa || '-'}</td><td><span class="print-btn stampa-ric" data-ordine="${r.ordine}" data-indice="${r.indice}">🖶 stampa</span></td></tr>`).join('')}
                   </tbody>
                 </table>
               </div>
@@ -3780,6 +4030,9 @@
             const inArrivoAcquisti = ordinatoApertoPer(m.codice);
             const inArrivoProduzione = m.tipo === 'PF' ? pianificatoApertoPer(m.codice) : 0;
             const inArrivo = inArrivoAcquisti + inArrivoProduzione;
+            const inUscitaProduzione = consumoProduzioneApertoPer(m.codice);
+            const inUscitaVendite = m.tipo === 'PF' ? venditeAperteApertoPer(m.codice) : 0;
+            const inUscita = inUscitaProduzione + inUscitaVendite;
             const perLocazione = locazioni.map(l => getGiacenzaLoc(m.codice, l.codice));
             const totale = getGiacenza(m.codice);
             return {
@@ -3789,40 +4042,64 @@
                 inArrivoAcquisti,
                 inArrivoProduzione,
                 inArrivo,
-                teorica: totale + inArrivo
+                inUscitaProduzione,
+                inUscitaVendite,
+                inUscita,
+                teorica: totale + inArrivo - inUscita
             };
         });
 
         el.innerHTML = `
             <div class="actionrow"><button class="actionbtn" id="export-mmbe">📥 Scarica report (Excel/CSV)</button></div>
+            <p style="font-size:10.5px; color:#5a6470; margin:0 10px 4px 10px;">
+              <strong>Giacenza effettiva</strong> = quello fisicamente presente ora · <strong>In entrata</strong> = acquisti/produzione ancora da ricevere/confermare ·
+              <strong>In uscita</strong> = già impegnato per produzione o vendite non ancora consegnate · <strong>Giacenza proiettata</strong> = effettiva + entrata − uscita.
+            </p>
             <div class="tablewrap" style="margin-top:0; overflow-x:auto;">
               <table>
                 <thead><tr>
                   <th>Stato</th><th>Codice</th><th>Descrizione</th><th>Tipo</th><th>UM</th>
-                  ${locazioni.map(l => `<th style="text-align:center;">${l.codice}</th>`).join('')}
-                  <th style="text-align:center;">Totale</th>
-                  <th style="text-align:center;">In arrivo<br>(acquisti)</th>
-                  <th style="text-align:center;">In arrivo<br>(produzione)</th>
-                  <th style="text-align:center;">Giacenza teorica</th>
+                  <th style="text-align:center;" class="mmbe-loc-toggle" title="Clicca per mostrare/nascondere le ubicazioni">Ubicazioni ▸</th>
+                  <th style="text-align:center;">Effettiva</th>
+                  <th style="text-align:center;">In entrata<br>(acquisti)</th>
+                  <th style="text-align:center;">In entrata<br>(produzione)</th>
+                  <th style="text-align:center;">In uscita<br>(produzione)</th>
+                  <th style="text-align:center;">In uscita<br>(vendite)</th>
+                  <th style="text-align:center;">Giacenza<br>proiettata</th>
                 </tr></thead>
-                <tbody>${righe.length === 0 ? `<tr><td colspan="${9 + locazioni.length}" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun materiale in anagrafica.</td></tr>` : righe.map(r => {const coloreStato = r.teorica < 0 ? 'rosso' : (r.totale === 0 ? 'giallo' : 'verde');return `<tr>
+                <tbody>${righe.length === 0 ? `<tr><td colspan="12" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun materiale in anagrafica.</td></tr>` : righe.map(r => {const coloreStato = r.teorica < 0 ? 'rosso' : (r.totale === 0 ? 'giallo' : 'verde');return `<tr>
                         <td>${semaforo(coloreStato, '')}</td>
                         <td>${r.codice}</td><td>${r.descrizione}</td><td>${r.tipo === 'MP' ? 'Materia Prima' : 'Prodotto Finito'}</td><td>${r.um}</td>
-                        ${r.perLocazione.map(v => `<td style="text-align:center;">${v || ''}</td>`).join('')}
+                        <td style="text-align:center;"><span class="print-btn mmbe-loc-dettaglio" data-codice="${r.codice}" style="cursor:pointer;">📍 dettaglio</span></td>
                         <td style="text-align:center; font-weight:600;">${r.totale}</td>
                         <td style="text-align:center; color:${r.inArrivoAcquisti > 0 ? '#3a5a8c' : '#9a9a8f'};">${r.inArrivoAcquisti || ''}</td>
                         <td style="text-align:center; color:${r.inArrivoProduzione > 0 ? '#3a5a8c' : '#9a9a8f'};">${r.inArrivoProduzione || ''}</td>
-                        <td style="text-align:center; font-weight:600;">${r.teorica}</td>
+                        <td style="text-align:center; color:${r.inUscitaProduzione > 0 ? '#a86a1a' : '#9a9a8f'};">${r.inUscitaProduzione || ''}</td>
+                        <td style="text-align:center; color:${r.inUscitaVendite > 0 ? '#a86a1a' : '#9a9a8f'};">${r.inUscitaVendite || ''}</td>
+                        <td style="text-align:center; font-weight:600; color:${r.teorica < 0 ? '#a83232' : '#1a1a1a'};">${r.teorica}</td>
+                      </tr>
+                      <tr class="mmbe-loc-riga" data-codice="${r.codice}" style="display:none; background:#f5f4ee;">
+                        <td></td><td colspan="11" style="padding:6px 10px;">
+                          <strong style="font-size:10.5px;">Per ubicazione:</strong>
+                          ${locazioni.map((l, i) => `<span style="font-size:10.5px; margin-right:14px;">${l.codice}: <strong>${r.perLocazione[i] || 0}</strong></span>`).join('')}
+                        </td>
                       </tr>`;}).join('')}
                 </tbody>
               </table>
             </div>
           `;
+        document.querySelectorAll('.mmbe-loc-dettaglio').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const riga = document.querySelector(`.mmbe-loc-riga[data-codice="${btn.dataset.codice}"]`);
+                if (riga)
+                    riga.style.display = riga.style.display === 'none' ? '' : 'none';
+            });
+        });
         document.getElementById('export-mmbe').addEventListener('click', () => {
-            const intestazioni = ['Stato', 'Codice', 'Descrizione', 'Tipo', 'UM', ...locazioni.map(l => l.codice), 'Totale', 'In arrivo (acquisti)', 'In arrivo (produzione)', 'Giacenza teorica'];
+            const intestazioni = ['Stato', 'Codice', 'Descrizione', 'Tipo', 'UM', ...locazioni.map(l => l.codice), 'Effettiva', 'In entrata (acquisti)', 'In entrata (produzione)', 'In uscita (produzione)', 'In uscita (vendite)', 'Giacenza proiettata'];
             const righeCSV = righe.map(r => {
                 const statoTxt = r.teorica < 0 ? 'Critico' : (r.totale === 0 ? 'Attenzione' : 'OK');
-                return [statoTxt, r.codice, r.descrizione, r.tipo === 'MP' ? 'Materia Prima' : 'Prodotto Finito', r.um, ...r.perLocazione, r.totale, r.inArrivoAcquisti, r.inArrivoProduzione, r.teorica];
+                return [statoTxt, r.codice, r.descrizione, r.tipo === 'MP' ? 'Materia Prima' : 'Prodotto Finito', r.um, ...r.perLocazione, r.totale, r.inArrivoAcquisti, r.inArrivoProduzione, r.inUscitaProduzione, r.inUscitaVendite, r.teorica];
             });
             esportaCSV('MMBE_giacenze_' + isoDate(new Date()) + '.csv', intestazioni, righeCSV);
         });
@@ -4090,7 +4367,7 @@
                 <tbody>${righeDaSpedire.length === 0 ? '<tr><td colspan="7" style="text-align:center;color:#9a9a8f;padding:10px;">Nessuna riga da consegnare.</td></tr>' : righeDaSpedire.map(r => {const scaduto = r.dataRichiesta && r.dataRichiesta < oggiISO;const copertura = r.giacenzaDisp >= r.residuo;const coloreStato = scaduto ? 'rosso' : (copertura ? 'verde' : 'giallo');return `<tr class="riga-vl-select" data-ordine="${r.ordine}" style="cursor:pointer;">
                           <td>${semaforo(coloreStato, '')}</td>
                           <td style="color:${scaduto ? '#a83232' : '#1a1a1a'}; font-weight:${scaduto ? '600' : '400'};">${r.dataRichiesta || '-'}${scaduto ? ' ⚠️' : ''}</td>
-                          <td>${r.ordine}</td><td>${r.cliente}</td><td>${materialeLabel(r.prodotto)}</td>
+                          <td>${r.ordine}</td><td>${clienteLabel(r.cliente)}</td><td>${materialeLabel(r.prodotto)}</td>
                           <td>${r.residuo}</td>
                           <td style="color:${r.giacenzaDisp < r.residuo ? '#a83232' : '#1a6b2e'};">${r.giacenzaDisp}</td>
                         </tr>`;}).join('')}
@@ -4125,7 +4402,7 @@
             <div class="tablewrap">
               <table>
                 <thead><tr><th>N. DDT</th><th>Ordine vendita</th><th>Rif. cliente</th><th>Cliente</th><th>Prodotti</th><th>Creato da</th><th>Stampa</th></tr></thead>
-                <tbody>${consegne.length === 0 ? '<tr><td colspan="7" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna consegna effettuata.</td></tr>' : consegne.map(c => `<tr><td>${c.numero}</td><td>${c.ordineVendita}</td><td>${c.riferimentoCliente || '-'}</td><td>${c.cliente}</td><td style="font-size:10.5px;">${c.righe.map(r => materialeLabel(r.prodotto) + ' x' + r.quantita).join(', ')}</td><td>${c.creatoDa}</td><td><span class="print-btn stampa-ddt" data-numero="${c.numero}">🖶 stampa</span></td></tr>`).join('')}
+                <tbody>${consegne.length === 0 ? '<tr><td colspan="7" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna consegna effettuata.</td></tr>' : consegne.map(c => `<tr><td>${c.numero}</td><td>${c.ordineVendita}</td><td>${c.riferimentoCliente || '-'}</td><td>${clienteLabel(c.cliente)}</td><td style="font-size:10.5px;">${c.righe.map(r => materialeLabel(r.prodotto) + ' x' + r.quantita).join(', ')}</td><td>${c.creatoDa}</td><td><span class="print-btn stampa-ddt" data-numero="${c.numero}">🖶 stampa</span></td></tr>`).join('')}
                 </tbody>
               </table>
             </div>
@@ -4213,7 +4490,7 @@
             }
 
             const ddt = {
-                numero: nextDDTNumber(),
+                numero: await prossimoNumero('DDT'),
                 ordineVendita: ordine.numero,
                 cliente: ordine.cliente,
                 riferimentoCliente: ordine.riferimentoCliente || '',
@@ -4682,7 +4959,7 @@
             <div class="tablewrap">
               <table>
                 <thead><tr><th>Prodotto finito</th><th>Componenti</th><th>Creato da</th><th>Azioni</th></tr></thead>
-                <tbody>${distinte.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna distinta base creata.</td></tr>' : distinte.map(d => `<tr><td>${d.prodotto}</td><td>${d.componenti.map(c => c.codice + ' x' + c.qta).join(', ')}</td><td>${d.creatoDa}</td><td>${deleteActionCell('bom-' + d.prodotto)}</td></tr>`).join('')}
+                <tbody>${distinte.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna distinta base creata.</td></tr>' : distinte.map(d => `<tr><td>${materialeLabel(d.prodotto)}</td><td>${d.componenti.map(c => materialeLabel(c.codice) + ' x' + c.qta).join(', ')}</td><td>${d.creatoDa}</td><td>${deleteActionCell('bom-' + d.prodotto)}</td></tr>`).join('')}
                 </tbody>
               </table>
             </div>
@@ -4826,6 +5103,11 @@
     (async () => {
         if (!STORAGE_CONFIGURATO) {
             console.warn('FIREBASE_URL non configurato: i dati non saranno condivisi finché non viene impostato correttamente nel codice.');
+        }
+        const ban = await dispositivoBannato();
+        if (ban) {
+            renderDispositivoBannato(ban);
+            return;
         }
         await migraDatiLegacySeNecessario();
         const sessione = await _leggiSessioneDispositivo();
