@@ -5,570 +5,409 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GRS Solutions ERP Full</title>
     <style>
-    * {
-        box-sizing: border-box;
-    }
-
-    :root {
-        --header-h: 116px;
-        --screen-top-h: 0px;
-    }
-
-    html, body {
-        margin: 0;
-        padding: 0;
-        min-height: 100%;
-        font-family: Tahoma, "Segoe UI", Arial, sans-serif;
-        font-size: 11.5px;
-        background: #ece9d8;
-        color: #1a1a1a;
-    }
-
-    #app {
-        display: flex;
-        flex-direction: column;
-        min-height: 100vh;
-        min-height: 100dvh;
-    }
-
-    .app-header-sticky {
-        position: sticky;
-        top: 0;
-        z-index: 200;
-        display: flex;
-        flex-direction: column;
-        background: #ece9d8;
-    }
-
-    .screen-sticky-top {
-        position: sticky;
-        top: var(--header-h);
-        z-index: 150;
-        background: #ece9d8;
-    }
-
-    .titlebar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 3px 8px;
-        background: linear-gradient(to right, #2e5aa8, #5a89cf);
-        color: white;
-    }
-
-    .titlebar-left {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-    }
-
-    .logo {
-        width: 22px;
-        height: 22px;
-        background: linear-gradient(135deg, #0d1b2a 0%, #0d1b2a 52%, #16a974 100%);
-        border-radius: 6px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 12px;
-        font-weight: 800;
-        color: #fff;
-        font-family: Arial, sans-serif;
-        letter-spacing: -0.5px;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
-        flex-shrink: 0;
-    }
-
-    .titlebar span.name {
-        font-size: 11px;
-        font-weight: 600;
-    }
-
-    .menubar {
-        display: flex;
-        gap: 16px;
-        padding: 3px 8px;
-        background: #ece9d8;
-        border-bottom: 1px solid #b5b5b5;
-        font-size: 11px;
-    }
-
-    .menubar span {
-        cursor: default;
-        padding: 0 3px;
-    }
-
-    .menubar span:hover {
-        background: #d7e6f7;
-    }
-
-    .toolbar {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        padding: 3px 8px;
-        background: #ece9d8;
-        border-bottom: 1px solid #d4d0c0;
-    }
-
-    .toolbtn {
-        width: 26px;
-        height: 22px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border: 1px solid #8f8f8f;
-        border-radius: 2px;
-        background: linear-gradient(to bottom, #fefefe, #e3e3e3);
-        font-size: 13px;
-    }
-
-    .toolbtn-verde {
-        background: radial-gradient(circle at 35% 30%, #8fe89a, #1f9e3a);
-        border-color: #157a2a;
-        color: white;
-    }
-
-    .toolbtn-arancio {
-        background: radial-gradient(circle at 35% 30%, #ffcf7a, #e08a1e);
-        border-color: #b5680f;
-        color: white;
-    }
-
-    .toolbtn-rosso {
-        background: radial-gradient(circle at 35% 30%, #ff9a9a, #c0221f);
-        border-color: #941a17;
-        color: white;
-    }
-
-    .toolbtn.clickable {
-        cursor: pointer;
-    }
-
-    .toolbtn.clickable:hover {
-        background: linear-gradient(to bottom, #eef4fb, #d7e6f7);
-    }
-
-    .toolbtn.disabled {
-        opacity: .45;
-    }
-
-    .sep {
-        width: 1px;
-        height: 16px;
-        background: #b5b5b5;
-        margin: 0 4px;
-    }
-
-    .txfield {
-        display: flex;
-        align-items: center;
-        border: 1px solid #7f9db9;
-        background: white;
-        padding: 2px 6px;
-        margin-left: 4px;
-    }
-
-    .txfield input {
-        width: 180px;
-        border: none;
-        outline: none;
-        font-size: 11px;
-        font-family: inherit;
-    }
-
-    .spacer {
-        margin-left: auto;
-    }
-
-    .banner {
-        padding: 6px 10px;
-        background: #f7f5ec;
-        border-bottom: 1px solid #d4d0c0;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-
-    .banner h2 {
-        margin: 0;
-        font-size: 13.5px;
-        font-weight: 600;
-    }
-
-    .banner .user-badge {
-        font-size: 11px;
-        color: #3a5a8c;
-        font-weight: 600;
-    }
-
-    .body {
-        display: flex;
-        align-items: flex-start;
-    }
-
-    .sidebar {
-        width: 300px;
-        flex-shrink: 0;
-        background: white;
-        border-right: 1px solid #8f8f8f;
-        display: flex;
-        flex-direction: column;
-        position: sticky;
-        top: var(--header-h);
-        max-height: calc(100vh - var(--header-h));
-        max-height: calc(100dvh - var(--header-h));
-        overflow-y: auto;
-    }
-
-    .sidebar-header {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 5px 8px;
-        background: #e5e0cc;
-        border-bottom: 1px solid #c8c2a8;
-        font-weight: 600;
-        color: #4a4a4a;
-        font-size: 11px;
-        position: sticky;
-        top: 0;
-        z-index: 5;
-    }
-
-    .tree {
-        padding: 4px 0;
-    }
-
-    .tnode {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        padding: 2.5px 8px;
-        cursor: default;
-        user-select: none;
-        white-space: nowrap;
-    }
-
-    .tnode:hover {
-        background: #d7e6f7;
-    }
-
-    .tnode.clickable {
-        cursor: pointer;
-    }
-
-    .tnode .arrow-ico {
-        width: 12px;
-        font-size: 10px;
-        text-align: center;
-        flex-shrink: 0;
-    }
-
-    .tnode .leaf-dot {
-        width: 9px;
-        height: 9px;
-        border-radius: 1px;
-        flex-shrink: 0;
-        display: inline-block;
-    }
-
-    .tnode.inactive .lbl {
-        color: #9a9a8f;
-    }
-
-    .placeholder {
-        flex: 1;
-        background: #f7f5ec;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-
-    .placeholder p {
-        max-width: 380px;
-        text-align: center;
-        font-size: 12px;
-        color: #7c7768;
-        line-height: 1.5;
-    }
-
-    .screen {
-        display: flex;
-        flex-direction: column;
-    }
-
-    .actionrow {
-        display: flex;
-        gap: 6px;
-        padding: 6px 10px;
-        background: #ece9d8;
-        border-bottom: 1px solid #d4d0c0;
-        flex-wrap: wrap;
-    }
-
-    .actionbtn {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 5px 10px;
-        border: 1px solid #8f8f8f;
-        border-radius: 2px;
-        background: linear-gradient(to bottom, #fefefe, #e5e5e5);
-        font-size: 11.5px;
-        cursor: pointer;
-        white-space: nowrap;
-    }
-
-    .actionbtn:hover {
-        background: linear-gradient(to bottom, #eef4fb, #d7e6f7);
-    }
-
-    .actionbtn:disabled, .actionbtn.disabled {
-        opacity: .4;
-        cursor: default;
-    }
-
-    .formwrap {
-        padding: 12px 14px;
-        background: #ece9d8;
-        border-bottom: 1px solid #d4d0c0;
-    }
-
-    .formgrid {
-        display: grid;
-        grid-template-columns: 140px 1fr;
-        gap: 8px 10px;
-        max-width: 520px;
-        align-items: center;
-    }
-
-    .formgrid label {
-        text-align: right;
-        font-size: 11.5px;
-    }
-
-    .formgrid input, .formgrid select {
-        font-size: 11.5px;
-        padding: 3px 6px;
-        border: 1px solid #7f9db9;
-        background: white;
-        font-family: inherit;
-    }
-
-    .formgrid .full {
-        grid-column: 1 / -1;
-    }
-
-    .tablewrap {
-        background: white;
-        margin: 8px 10px 10px 10px;
-        border: 1px solid #8f8f8f;
-    }
-
-    table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 11px;
-    }
-
-    th {
-        background: #e5e0cc;
-        text-align: left;
-        padding: 5px 8px;
-        border-bottom: 1px solid #c8c2a8;
-        border-right: 1px solid #c8c2a8;
-        font-weight: 600;
-        white-space: nowrap;
-        position: sticky;
-        top: calc(var(--header-h) + var(--screen-top-h));
-        z-index: 50;
-    }
-
-    td {
-        padding: 4px 8px;
-        border-bottom: 1px solid #e0ddce;
-        border-right: 1px solid #e0ddce;
-    }
-
-    tr:hover td {
-        background: #f4f4ee;
-    }
-
-    .rowaction {
-        color: #2e5aa8;
-        cursor: pointer;
-        text-decoration: underline;
-        font-size: 10.5px;
-        margin-right: 8px;
-    }
-
-    .rowaction.danger {
-        color: #a83232;
-    }
-
-    .statusbar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 3px 8px;
-        background: #ece9d8;
-        border-top: 1px solid #b5b5b5;
-        font-size: 10.5px;
-        color: #4a4a4a;
-    }
-
-    .statusbar .right {
-        display: flex;
-        gap: 12px;
-    }
-
-    .msg-ok {
-        color: #1a6b2e;
-        font-weight: 600;
-    }
-
-    .msg-err {
-        color: #a83232;
-        font-weight: 600;
-    }/* Login overlay */
-
-    .login-overlay {
-        position: fixed;
-        inset: 0;
-        background: #1f3a5f;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 999;
-    }
-
-    .login-box {
-        background: #ece9d8;
-        border: 2px solid #7f9db9;
-        padding: 24px 28px;
-        width: 320px;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, .3);
-    }
-
-    .login-box h2 {
-        margin: 0 0 4px 0;
-        font-size: 15px;
-        color: #1a1a1a;
-    }
-
-    .login-box p {
-        margin: 0 0 16px 0;
-        font-size: 11px;
-        color: #5a6470;
-    }
-
-    .login-box input {
-        width: 100%;
-        padding: 8px;
-        font-size: 12px;
-        border: 1px solid #7f9db9;
-        margin-bottom: 12px;
-        font-family: inherit;
-    }
-
-    .login-box button {
-        width: 100%;
-        padding: 9px;
-        font-size: 12px;
-        font-weight: 600;
-        background: #2e5aa8;
-        color: white;
-        border: 1px solid #1f3a5f;
-        cursor: pointer;
-    }
-
-    .login-box button:hover {
-        background: #3a6ac0;
-    }
-
-    .login-note {
-        margin-top: 14px;
-        font-size: 10px;
-        color: #8a8a80;
-        line-height: 1.4;
-    }
-
-    .storage-warning {
-        background: #fff3cd;
-        color: #7a5a00;
-        border-bottom: 1px solid #e0c060;
-        padding: 5px 10px;
-        font-size: 10.5px;
-        text-align: center;
-    }
-
-    .semaforo {
-        display: inline-block;
-        width: 9px;
-        height: 9px;
-        border-radius: 50%;
-        margin-right: 5px;
-        vertical-align: middle;
-        border: 1px solid rgba(0, 0, 0, .35);
-        box-shadow: inset 0 0 1px rgba(255, 255, 255, .6);
-    }
-
-    .semaforo-verde {
-        background: radial-gradient(circle at 30% 30%, #7fe08a, #1a8a2e);
-    }
-
-    .semaforo-giallo {
-        background: radial-gradient(circle at 30% 30%, #ffe58a, #d9a300);
-    }
-
-    .semaforo-rosso {
-        background: radial-gradient(circle at 30% 30%, #ff8a8a, #b0201f);
-    }
-
-    .stato-badge {
-        display: inline-flex;
-        align-items: center;
-        font-weight: 600;
-    }
-
-    .print-btn {
-        color: #2e5aa8;
-        cursor: pointer;
-        text-decoration: underline;
-        font-size: 10.5px;
-    }
-
-    #print-area {
-        position: fixed;
-        inset: 0;
-        background: #c7c7c7;
-        overflow: auto;
-        z-index: 2000;
-    }
-
-    @media print {
-        body * {
-            visibility: hidden;
+        * {
+            box-sizing: border-box;
         }
 
-        #print-area, #print-area * {
-            visibility: visible;
+        :root {
+            --header-h: 116px;
+            --screen-top-h: 0px;
         }
 
-        #print-area {
-            display: block !important;
-            position: absolute;
+        html, body {
+            margin: 0;
+            padding: 0;
+            min-height: 100%;
+            font-family: Tahoma, "Segoe UI", Arial, sans-serif;
+            font-size: 11.5px;
+            background: #ece9d8;
+            color: #1a1a1a;
+        }
+
+        #app {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            min-height: 100dvh;
+        }
+
+        .app-header-sticky {
+            position: sticky;
             top: 0;
-            left: 0;
-            width: 100%;
-            background: white;
+            z-index: 200;
+            display: flex;
+            flex-direction: column;
+            background: #ece9d8;
         }
 
-        .print-toolbar {
-            display: none !important;
+        .screen-sticky-top {
+            position: sticky;
+            top: var(--header-h);
+            z-index: 150;
+            background: #ece9d8;
         }
-    }
+
+        .titlebar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 3px 8px;
+            background: linear-gradient(to right, #2e5aa8, #5a89cf);
+            color: white;
+        }
+
+        .titlebar-left {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .logo {
+            width: 22px;
+            height: 22px;
+            background: linear-gradient(135deg, #0d1b2a 0%, #0d1b2a 52%, #16a974 100%);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 800;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            letter-spacing: -0.5px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+            flex-shrink: 0;
+        }
+
+        .titlebar span.name {
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .menubar {
+            display: flex;
+            gap: 16px;
+            padding: 3px 8px;
+            background: #ece9d8;
+            border-bottom: 1px solid #b5b5b5;
+            font-size: 11px;
+        }
+
+        .menubar span {
+            cursor: default;
+            padding: 0 3px;
+        }
+
+        .menubar span:hover {
+            background: #d7e6f7;
+        }
+
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            background: #ece9d8;
+            border-bottom: 1px solid #d4d0c0;
+        }
+
+        .toolbtn {
+            width: 26px;
+            height: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #8f8f8f;
+            border-radius: 2px;
+            background: linear-gradient(to bottom, #fefefe, #e3e3e3);
+            font-size: 13px;
+        }
+
+        .toolbtn-verde {
+            background: radial-gradient(circle at 35% 30%, #8fe89a, #1f9e3a);
+            border-color: #157a2a;
+            color: white;
+        }
+
+        .toolbtn-arancio {
+            background: radial-gradient(circle at 35% 30%, #ffcf7a, #e08a1e);
+            border-color: #b5680f;
+            color: white;
+        }
+
+        .toolbtn-rosso {
+            background: radial-gradient(circle at 35% 30%, #ff9a9a, #c0221f);
+            border-color: #941a17;
+            color: white;
+        }
+
+        .toolbtn.clickable {
+            cursor: pointer;
+        }
+
+        .toolbtn.clickable:hover {
+            background: linear-gradient(to bottom, #eef4fb, #d7e6f7);
+        }
+
+        .toolbtn.disabled {
+            opacity: .45;
+        }
+
+        .sep {
+            width: 1px;
+            height: 16px;
+            background: #b5b5b5;
+            margin: 0 4px;
+        }
+
+        .txfield {
+            display: flex;
+            align-items: center;
+            border: 1px solid #7f9db9;
+            background: white;
+            padding: 2px 6px;
+            margin-left: 4px;
+        }
+
+        .txfield input {
+            width: 180px;
+            border: none;
+            outline: none;
+            font-size: 11px;
+            font-family: inherit;
+        }
+
+        .spacer {
+            margin-left: auto;
+        }
+
+        .banner {
+            padding: 6px 10px;
+            background: #f7f5ec;
+            border-bottom: 1px solid #d4d0c0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .banner h2 {
+            margin: 0;
+            font-size: 13.5px;
+            font-weight: 600;
+        }
+
+        .banner .user-badge {
+            font-size: 11px;
+            color: #3a5a8c;
+            font-weight: 600;
+        }
+
+        .body {
+            display: flex;
+            align-items: flex-start;
+        }
+
+        .sidebar {
+            width: 300px;
+            flex-shrink: 0;
+            background: white;
+            border-right: 1px solid #8f8f8f;
+            display: flex;
+            flex-direction: column;
+            position: sticky;
+            top: var(--header-h);
+            max-height: calc(100vh - var(--header-h));
+            max-height: calc(100dvh - var(--header-h));
+            overflow-y: auto;
+        }
+
+        .sidebar-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 8px;
+            background: #e5e0cc;
+            border-bottom: 1px solid #c8c2a8;
+            font-weight: 600;
+            color: #4a4a4a;
+            font-size: 11px;
+            position: sticky;
+            top: 0;
+            z-index: 5;
+        }
+
+        .tree {
+            padding: 4px 0;
+        }
+
+        .tnode {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2.5px 8px;
+            cursor: default;
+            user-select: none;
+            white-space: nowrap;
+        }
+
+        .tnode:hover {
+            background: #d7e6f7;
+        }
+
+        .tnode.clickable {
+            cursor: pointer;
+        }
+
+        .tnode .arrow-ico {
+            width: 12px;
+            font-size: 10px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        .tnode .leaf-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 1px;
+            flex-shrink: 0;
+            display: inline-block;
+        }
+
+        .tnode.inactive .lbl {
+            color: #9a9a8f;
+        }
+
+        .placeholder {
+            flex: 1;
+            background: #f7f5ec;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .placeholder p {
+            max-width: 380px;
+            text-align: center;
+            font-size: 12px;
+            color: #7c7768;
+            line-height: 1.5;
+        }
+
+        .screen {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .actionrow {
+            display: flex;
+            gap: 6px;
+            padding: 6px 10px;
+            background: #ece9d8;
+            border-bottom: 1px solid #d4d0c0;
+            flex-wrap: wrap;
+        }
+
+        .actionbtn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 10px;
+            border: 1px solid #8f8f8f;
+            border-radius: 2px;
+            background: linear-gradient(to bottom, #fefefe, #e5e5e5);
+            font-size: 11.5px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .actionbtn:hover {
+            background: linear-gradient(to bottom, #eef4fb, #d7e6f7);
+        }
+
+        .actionbtn:disabled, .actionbtn.disabled {
+            opacity: .4;
+            cursor: default;
+        }
+
+        .formwrap {
+            padding: 12px 14px;
+            background: #ece9d8;
+            border-bottom: 1px solid #d4d0c0;
+        }
+
+        .formgrid {
+            display: grid;
+            grid-template-columns: 140px 1fr;
+            gap: 8px 10px;
+            max-width: 520px;
+            align-items: center;
+        }
+
+        .formgrid label {
+            text-align: right;
+            font-size: 11.5px;
+        }
+
+        .formgrid input, .formgrid select {
+            font-size: 11.5px;
+            padding: 3px 6px;
+            border: 1px solid #7f9db9;
+            background: white;
+            font-family: inherit;
+        }
+
+        .formgrid .full {
+            grid-column: 1 / -1;
+        }
+
+        /* Lista a selezione multipla in stile SAP (sostituisce il 
+        
+        <select multiple> nativo, che con
+             tante voci diventa un "banner" poco leggibile): riquadro con bordo, scroll interno, righe
+             alternate, evidenziazione al passaggio del mouse. */
+          .selectlist-sap { border:1px solid #7f9db9; background:white; overflow-y:auto; }
+          .selectlist-sap-row { display:flex; align-items:center; gap:6px; padding:3px 8px; font-size:11px; cursor:pointer; border-bottom:1px solid #eee; }
+          .selectlist-sap-row:nth-child(even) { background:#f7f7f2; }
+          .selectlist-sap-row:hover { background:#dfe6f0; }
+          .selectlist-sap-row input[type="checkbox"] { margin:0; cursor:pointer; }
+
+          .tablewrap { background:white; margin:8px 10px 10px 10px; border:1px solid #8f8f8f; }
+          table { width:100%; border-collapse:collapse; font-size:11px; }
+          th { background:#e5e0cc; text-align:left; padding:5px 8px; border-bottom:1px solid #c8c2a8; border-right:1px solid #c8c2a8; font-weight:600; white-space:nowrap; position:sticky; top: calc(var(--header-h) + var(--screen-top-h)); z-index:50; }
+          td { padding:4px 8px; border-bottom:1px solid #e0ddce; border-right:1px solid #e0ddce; }
+          tr:hover td { background:#f4f4ee; }
+          .rowaction { color:#2e5aa8; cursor:pointer; text-decoration:underline; font-size:10.5px; margin-right:8px; }
+          .rowaction.danger { color:#a83232; }
+
+          .statusbar { display:flex; align-items:center; justify-content:space-between; padding:3px 8px; background:#ece9d8; border-top:1px solid #b5b5b5; font-size:10.5px; color:#4a4a4a; }
+          .statusbar .right { display:flex; gap:12px; }
+          .msg-ok { color:#1a6b2e; font-weight:600; }
+          .msg-err { color:#a83232; font-weight:600; }
+
+          /* Login overlay */
+          .login-overlay { position:fixed; inset:0; background:#1f3a5f; display:flex; align-items:center; justify-content:center; z-index:999; }
+          .login-box { background:#ece9d8; border:2px solid #7f9db9; padding:24px 28px; width:320px; box-shadow:0 8px 24px rgba(0,0,0,.3); }
+          .login-box h2 { margin:0 0 4px 0; font-size:15px; color:#1a1a1a; }
+          .login-box p { margin:0 0 16px 0; font-size:11px; color:#5a6470; }
+          .login-box input { width:100%; padding:8px; font-size:12px; border:1px solid #7f9db9; margin-bottom:12px; font-family:inherit; }
+          .login-box button { width:100%; padding:9px; font-size:12px; font-weight:600; background:#2e5aa8; color:white; border:1px solid #1f3a5f; cursor:pointer; }
+          .login-box button:hover { background:#3a6ac0; }
+          .login-note { margin-top:14px; font-size:10px; color:#8a8a80; line-height:1.4; }
+
+          .storage-warning { background:#fff3cd; color:#7a5a00; border-bottom:1px solid #e0c060; padding:5px 10px; font-size:10.5px; text-align:center; }
+          .semaforo { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; vertical-align:middle; border:1px solid rgba(0,0,0,.35); box-shadow: inset 0 0 1px rgba(255,255,255,.6); }
+          .semaforo-verde { background: radial-gradient(circle at 30% 30%, #7fe08a, #1a8a2e); }
+          .semaforo-giallo { background: radial-gradient(circle at 30% 30%, #ffe58a, #d9a300); }
+          .semaforo-rosso { background: radial-gradient(circle at 30% 30%, #ff8a8a, #b0201f); }
+          .stato-badge { display:inline-flex; align-items:center; font-weight:600; }
+          .print-btn { color:#2e5aa8; cursor:pointer; text-decoration:underline; font-size:10.5px; }
+          #print-area { position:fixed; inset:0; background:#c7c7c7; overflow:auto; z-index:2000; }
+          @media print {
+            body * { visibility: hidden; }
+            #print-area, #print-area * { visibility: visible; }
+            #print-area { display:block !important; position: absolute; top:0; left:0; width:100%; background:white; }
+            .print-toolbar { display:none !important; }
+          }
     </style>
 </head>
 <body>
@@ -1752,7 +1591,6 @@
               <div class="login-box">
                 <h2 style="margin:0 0 4px 0;">🔧 Amministrazione</h2>
                 <p>Inserisci il ${_adminPinFase === 1 ? 'primo' : 'secondo'} PIN (${_adminPinFase}/2).</p>
-                <p style="font-size:10.5px; color:#a83232; margin-top:-4px;">Attenzione: un PIN sbagliato blocca immediatamente questo dispositivo dall'intero programma.</p>
                 <input type="password" id="admin-pin" placeholder="PIN" autocomplete="off">
                 <button id="admin-pin-btn">Entra</button>
                 <div class="login-note"><span id="admin-back" style="text-decoration:underline; cursor:pointer;">← torna al login</span></div>
@@ -2389,6 +2227,7 @@
         else if (screen === 'MB51')
             renderMovList(el);
         applicaLayoutSticky();
+        abilitaOrdinamentoGenerico();
     }
 
     // Rende fisse (sticky) durante lo scroll: l'intestazione globale in alto (già gestita via CSS),
@@ -2396,6 +2235,11 @@
     // più la riga di intestazione della prima tabella stessa. Il resto (righe della tabella) scorre
     // liberamente. Le altezze sono misurate dal vero DOM ad ogni render, quindi si adattano da sole
     // anche quando il contenuto della schermata cambia (form più lungo, banner di avviso, ecc.).
+    // Oltre questa altezza, il blocco prima della tabella NON viene reso sticky: su schermate con
+    // liste lunghe e variabili (es. ME21N con tante richieste d'acquisto selezionabili) renderlo
+    // sticky bloccava lo scroll in modo innaturale (bisognava scorrere a vuoto per tutta la sua
+    // altezza prima che la pagina si muovesse davvero).
+    const MAX_ALTEZZA_STICKY_TOP = 260;
     function applicaLayoutSticky() {
         const headerEl = document.querySelector('.app-header-sticky');
         if (headerEl)
@@ -2406,12 +2250,19 @@
         const figli = Array.from(cont.children);
         const idxTabella = figli.findIndex(c => c.classList && c.classList.contains('tablewrap'));
         if (idxTabella > 0) {
-            const wrapper = document.createElement('div');
-            wrapper.className = 'screen-sticky-top';
-            cont.insertBefore(wrapper, figli[0]);
+            let altezzaBlocco = 0;
             for (let i = 0; i < idxTabella; i++)
-                wrapper.appendChild(figli[i]);
-            document.documentElement.style.setProperty('--screen-top-h', wrapper.offsetHeight + 'px');
+                altezzaBlocco += figli[i].offsetHeight;
+            if (altezzaBlocco <= MAX_ALTEZZA_STICKY_TOP) {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'screen-sticky-top';
+                cont.insertBefore(wrapper, figli[0]);
+                for (let i = 0; i < idxTabella; i++)
+                    wrapper.appendChild(figli[i]);
+                document.documentElement.style.setProperty('--screen-top-h', wrapper.offsetHeight + 'px');
+            } else {
+                document.documentElement.style.setProperty('--screen-top-h', '0px');
+            }
         } else {
             document.documentElement.style.setProperty('--screen-top-h', '0px');
         }
@@ -2420,6 +2271,71 @@
         if (document.getElementById('screen-content'))
             applicaLayoutSticky();
     });
+
+    // ============ ORDINAMENTO GENERICO DELLE TABELLE (click su intestazione colonna, stile SAP) ============
+    // Si applica a qualunque tabella dentro #screen-content che NON abbia già un ordinamento "su misura"
+    // (riconosciuto dalla presenza di intestazioni con classe che finisce per "-sort-th", es. MB51/MIGO/MMBE/LS24).
+    // Ordina il DOM direttamente (senza toccare lo stato dell'app): comodo e leggero, ma non sopravvive
+    // a un nuovo render della schermata — esattamente come un click su intestazione in SAP GUI.
+    function abilitaOrdinamentoGenerico() {
+        const cont = document.getElementById('screen-content');
+        if (!cont)
+            return;
+        const COLONNE_NON_ORDINABILI = ['azioni', 'azione', 'stampa'];
+        cont.querySelectorAll('table').forEach(tabella => {
+            if (tabella.querySelector('th[class$="-sort-th"]'))
+                return; // già gestita a mano
+            const thead = tabella.querySelector('thead');
+            const tbody = tabella.querySelector('tbody');
+            if (!thead || !tbody)
+                return;
+            const ths = Array.from(thead.querySelectorAll('tr:last-child th'));
+            if (ths.length === 0)
+                return;
+            ths.forEach((th, colIdx) => {
+                const etichetta = (th.textContent || '').trim().toLowerCase();
+                if (COLONNE_NON_ORDINABILI.includes(etichetta))
+                    return;
+                if (th.dataset.genOrdSetup)
+                    return; // evita doppio binding se richiamata più volte
+                th.dataset.genOrdSetup = '1';
+                if (!th.dataset.genOrdLabel)
+                    th.dataset.genOrdLabel = th.textContent;
+                th.style.cursor = 'pointer';
+                th.style.userSelect = 'none';
+                th.title = 'Clicca per ordinare';
+                th.addEventListener('click', () => {
+                    const righe = Array.from(tbody.querySelectorAll('tr'));
+                    // Non ordinare tabelle vuote/segnaposto (riga unica con colspan diverso dal numero di colonne).
+                    if (righe.length === 0 || righe.some(r => r.children.length !== ths.length))
+                        return;
+                    const asc = th.dataset.genOrdAsc !== 'true';
+                    ths.forEach(t => {
+                        t.dataset.genOrdAsc = '';
+                        t.textContent = t.dataset.genOrdLabel || t.textContent;
+                    });
+                    th.dataset.genOrdAsc = String(asc);
+                    th.textContent = (th.dataset.genOrdLabel || th.textContent) + (asc ? ' ▲' : ' ▼');
+                    const valoreCella = (tr) => (tr.children[colIdx].textContent || '').trim();
+                    const tuttiNumerici = righe.every(tr => {
+                        const v = valoreCella(tr).replace(/[€%\s]/g, '').replace(',', '.');
+                        return v === '' || !isNaN(Number(v));
+                    });
+                    righe.sort((a, b) => {
+                        let va = valoreCella(a),
+                            vb = valoreCella(b);
+                        if (tuttiNumerici) {
+                            const na = Number(va.replace(/[€%\s]/g, '').replace(',', '.')) || 0;
+                            const nb = Number(vb.replace(/[€%\s]/g, '').replace(',', '.')) || 0;
+                            return asc ? na - nb : nb - na;
+                        }
+                        return asc ? va.localeCompare(vb, 'it') : vb.localeCompare(va, 'it');
+                    });
+                    righe.forEach(tr => tbody.appendChild(tr));
+                });
+            });
+        });
+    }
 
     // ============ HELPERS DI DOMINIO ============
     // Elenco in memoria da controllare per ciascun prefisso di numerazione, per evitare che un
@@ -3453,10 +3369,18 @@
               </div>
               ${fornitori.length === 0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun fornitore in anagrafica: crearlo prima in XK01.</p>' :
         `<div style="margin-top:10px;">
-                  <label style="font-size:11.5px; display:block; margin-bottom:6px;">Fornitori abituali (tieni premuto Cmd/Ctrl per selezionarne più di uno, es. due viterie diverse):</label>
-                  <select id="f-fornitori-multi" multiple size="${Math.min(fornitori.length, 6)}" style="width:100%; font-size:11.5px; padding:4px;">
-                    ${fornitori.map(f => `<option value="${f.codice}" ${fornSelezionati.includes(f.codice) ? 'selected' : ''}>${f.codice} - ${f.ragioneSociale}</option>`).join('')}
-                  </select>
+                  <label style="font-size:11.5px; display:block; margin-bottom:6px;">Fornitori abituali (spunta uno o più, es. due viterie diverse):</label>
+                  <div style="display:flex; align-items:center; gap:10px; margin-bottom:4px;">
+                    <input id="f-fornitori-cerca" type="text" placeholder="Filtra per codice o ragione sociale…" style="flex:1; font-size:11px; padding:4px; border:1px solid #7f9db9;">
+                    <span style="font-size:10.5px; color:#3a5a8c;">${fornSelezionati.length} selezionato/i</span>
+                  </div>
+                  <div id="f-fornitori-lista" class="selectlist-sap" style="max-height:${Math.min(fornitori.length * 26 + 2, 220)}px;">
+                    ${fornitori.map(f => `
+                      <label class="selectlist-sap-row" data-cerca="${(f.codice + ' ' + f.ragioneSociale).toLowerCase()}">
+                        <input type="checkbox" class="f-fornitore-check" value="${f.codice}" ${fornSelezionati.includes(f.codice) ? 'checked' : ''}>
+                        <span><strong>${f.codice}</strong> — ${f.ragioneSociale}</span>
+                      </label>`).join('')}
+                  </div>
                 </div>`}
             </div>
             <div class="tablewrap">
@@ -3484,10 +3408,21 @@
             draftAssocMatFor.fornitori = fornitoriMateriale.filter(a => a.materiale === e.target.value).map(a => a.fornitore);
             renderScreenContent();
         });
-        const selMulti = document.getElementById('f-fornitori-multi');
-        if (selMulti)
-            selMulti.addEventListener('change', () => {
-                draftAssocMatFor.fornitori = [...selMulti.selectedOptions].map(o => o.value);
+        document.querySelectorAll('.f-fornitore-check').forEach(cb => {
+            cb.addEventListener('change', () => {
+                draftAssocMatFor.fornitori = [...document.querySelectorAll('.f-fornitore-check:checked')].map(c => c.value);
+                const contatore = document.querySelector('#f-fornitori-lista')?.previousElementSibling?.querySelector('span');
+                if (contatore)
+                    contatore.textContent = `${draftAssocMatFor.fornitori.length} selezionato/i`;
+            });
+        });
+        const campoCerca = document.getElementById('f-fornitori-cerca');
+        if (campoCerca)
+            campoCerca.addEventListener('input', e => {
+                const q = e.target.value.trim().toLowerCase();
+                document.querySelectorAll('#f-fornitori-lista .selectlist-sap-row').forEach(row => {
+                    row.style.display = row.dataset.cerca.includes(q) ? '' : 'none';
+                });
             });
         document.getElementById('save-assocmf').addEventListener('click', () => withGuard(async () => {
             if (!draftAssocMatFor.materiale) {
@@ -3916,10 +3851,17 @@
         document.querySelectorAll('.confirm-delete-yes').forEach(elx => {
             elx.addEventListener('click', () => withGuard(async () => {
                 const numero = elx.dataset.key.replace('pr-', '');
+                const duplicati = richiesteAcquisto.filter(r => r.numero === numero).length;
                 await eliminaRecord('richiesteAcquisto', numero);
                 richiesteAcquisto = richiesteAcquisto.filter(r => r.numero !== numero);
                 confirmDeleteKey = null;
-                setStatus(`Richiesta d'acquisto ${numero} eliminata.`);
+                if (!storageOk) {
+                    setStatus(`⚠️ Richiesta rimossa solo su questo dispositivo: il salvataggio sul server condiviso è fallito. Aggiornando la pagina potrebbe ricomparire. Riprova quando la connessione torna disponibile.`, true);
+                } else if (duplicati > 1) {
+                    setStatus(`Richiesta d'acquisto ${numero} eliminata, ma esistono altre righe con lo stesso numero (dato storico duplicato): controlla se dopo l'aggiornamento ne resta ancora una simile.`, true);
+                } else {
+                    setStatus(`Richiesta d'acquisto ${numero} eliminata.`);
+                }
                 renderMain();
             }));
         });
