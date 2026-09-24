@@ -2531,12 +2531,18 @@
     }
 
     function stampaRicevimentoPerMateriale(numeroOrdine, materiale) {
-        const o = ordiniAcquisto.find(x => x.numero === numeroOrdine);
-        if (!o)
+        const duplicati = ordiniAcquisto.filter(x => x.numero === numeroOrdine);
+        const o = duplicati[0];
+        if (!o) {
+            setStatus(`Impossibile stampare: ordine ${numeroOrdine} non trovato.`, true);
             return;
+        }
         const idx = o.righe.findIndex(r => r.materiale === materiale && rigaHaRicezioni(r));
-        if (idx === -1)
+        if (idx === -1) {
+            const suggerimento = duplicati.length > 1 ? ` Attenzione: esistono più ordini con numero ${numeroOrdine} (dato storico duplicato) — potrebbe essere questo il motivo.` : '';
+            setStatus(`Impossibile stampare: nessuna riga ricevuta per ${materialeLabel(materiale)} trovata nell'ordine ${numeroOrdine}.${suggerimento}`, true);
             return;
+        }
         stampaRicevimento(numeroOrdine, idx);
     }
     function stampaRicevimento(numeroOrdine, indice) {
@@ -4008,14 +4014,23 @@
                 }
                 const [, numero, indiceStr] = chiave.split('::');
                 const indice = Number(indiceStr);
-                const o = ordiniAcquisto.find(x => x.numero === numero);
+                const duplicatiOa = ordiniAcquisto.filter(x => x.numero === numero);
+                const o = duplicatiOa[0];
                 if (!o) {
+                    setStatus(`Impossibile annullare: ordine ${numero} non trovato (potrebbe essere stato già rimosso).`, true);
                     confirmDeleteKey = null;
                     renderScreenContent();
                     return;
                 }
                 const riga = o.righe[indice];
-                if (!riga || rigaHaRicezioni(riga)) {
+                if (!riga) {
+                    const suggerimento = duplicatiOa.length > 1 ? ` Esistono più ordini con numero ${numero} (dato storico duplicato): probabile causa.` : '';
+                    setStatus(`Impossibile annullare: la riga non è più nella posizione attesa (dati cambiati nel frattempo).${suggerimento} Aggiorna la pagina e riprova.`, true);
+                    confirmDeleteKey = null;
+                    renderScreenContent();
+                    return;
+                }
+                if (rigaHaRicezioni(riga)) {
                     setStatus('Impossibile annullare: questa riga è già stata (almeno in parte) ricevuta.', true);
                     confirmDeleteKey = null;
                     renderScreenContent();
@@ -4269,7 +4284,7 @@
                 riga.ddtFornitore = ddt;
                 riga.dataRicevimento = dataRicevimento;
                 riga.ricevutoDa = currentUser;
-                const causaleParziale = qtaInserita < Number(riga.quantita) ? `Ricevimento MIGO parziale (${numeroOrdine}, DDT ${ddt})` : 'Ricevimento MIGO (' + numeroOrdine + ', DDT ' + ddt + ')';
+                const causaleParziale = !completo ? `Ricevimento MIGO parziale (${numeroOrdine}, DDT ${ddt})` : 'Ricevimento MIGO (' + numeroOrdine + ', DDT ' + ddt + ')';
                 await registraMovimento({
                     materiale: riga.materiale,
                     locazioneDa: null,
@@ -4975,7 +4990,7 @@
             <div class="tablewrap">
               <table>
                 <thead><tr>${colonne.map(c => `<th class="mov-sort-th" data-campo="${c.campo}" style="cursor:pointer; user-select:none;" title="Clicca per ordinare">${c.label}${sortMov.campo === c.campo ? (sortMov.asc ? ' ▲' : ' ▼') : ''}</th>`).join('')}<th>Stampa</th></tr></thead>
-                <tbody>${elenco.length === 0 ? `<tr><td colspan="${colonne.length + 1}" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna movimentazione.</td></tr>` : elenco.map(m => {const matchRic = (m.causale || '').match(/^Ricevimento MIGO \(([^,]+)/);const stampaCell = matchRic ? `<span class="print-btn stampa-ric-mb51" data-ordine="${matchRic[1]}" data-materiale="${m.materiale}">🖶 stampa</span>` : '';return `<tr><td>${m.numero}</td><td>${materialeLabel(m.materiale)}</td><td>${m.tipo}</td><td>${m.locazioneDa || '-'}</td><td>${m.locazioneA || '-'}</td><td>${m.quantita}</td><td>${m.controparte || '-'}</td><td>${m.causale}</td><td>${m.creatoIl}</td><td>${m.creatoDa}</td><td>${stampaCell}</td></tr>`;}).join('')}
+                <tbody>${elenco.length === 0 ? `<tr><td colspan="${colonne.length + 1}" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna movimentazione.</td></tr>` : elenco.map(m => {const matchRic = (m.causale || '').match(/^Ricevimento MIGO(?: parziale)? \(([^,]+)/);const stampaCell = matchRic ? `<span class="print-btn stampa-ric-mb51" data-ordine="${matchRic[1]}" data-materiale="${m.materiale}">🖶 stampa</span>` : '';return `<tr><td>${m.numero}</td><td>${materialeLabel(m.materiale)}</td><td>${m.tipo}</td><td>${m.locazioneDa || '-'}</td><td>${m.locazioneA || '-'}</td><td>${m.quantita}</td><td>${m.controparte || '-'}</td><td>${m.causale}</td><td>${m.creatoIl}</td><td>${m.creatoDa}</td><td>${stampaCell}</td></tr>`;}).join('')}
                 </tbody>
               </table>
             </div>
