@@ -2450,13 +2450,16 @@
         } else {
             document.documentElement.style.setProperty('--screen-top-h', '0px');
         }
-        // L'intestazione sticky (vedi CSS .tablewrap-sticky-head) va SOLO sulla prima tabella della
-        // schermata, cercata in tutta la sottoalbero (non solo tra i figli diretti di #screen-content):
-        // su MF50 le tabelle sono annidate dentro vari div (una per linea, una per prodotto) e se ogni
-        // th diventasse sticky si "accavallerebbero" tutte sulla stessa posizione durante lo scroll.
-        const primaTabella = cont.querySelector('.tablewrap');
-        if (primaTabella)
-            primaTabella.classList.add('tablewrap-sticky-head');
+        // L'intestazione sticky (vedi CSS .tablewrap-sticky-head) ha senso SOLO quando la schermata ha
+        // UNA sola tabella lunga in cui si scorre (le sue righe): lì l'intestazione che resta visibile
+        // mentre scorri è utile. Se la schermata ha PIÙ tabelle in sequenza (es. MF50: una per linea, una
+        // per prodotto), rendere sticky anche solo la prima è comunque sbagliato: mentre scorri oltre la
+        // sua fine, la sua intestazione resta incollata in cima e le righe di tabelle successive e del
+        // tutto diverse scorrono sotto, dando l'impressione che la prima "inglobi" le altre. Quindi qui si
+        // applica lo sticky solo se la tabella trovata è l'UNICA della schermata.
+        const tutteLeTabelle = cont.querySelectorAll('.tablewrap');
+        if (tutteLeTabelle.length === 1)
+            tutteLeTabelle[0].classList.add('tablewrap-sticky-head');
     }
     window.addEventListener('resize', () => {
         if (document.getElementById('screen-content'))
