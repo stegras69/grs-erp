@@ -1801,10 +1801,17 @@
         const opConProv = await _elencoConProvenienza('ordiniProduzione', corso);
         const opDaEliminare = opConProv.filter(x => x.rec.stato === 'aperto' && primaDOggi(x.rec));
 
+        // Ordini di vendita "non elaborati": ancora aperti, creati prima di oggi, e con NESSUNA riga
+        // già consegnata (nemmeno parzialmente) — se anche solo una riga ha del consegnato, l'ordine
+        // ha già generato movimenti/DDT reali e non va toccato da una pulizia di massa.
+        const ovConProv = await _elencoConProvenienza('ordiniVendita', corso);
+        const ovDaEliminare = ovConProv.filter(x => x.rec.stato === 'aperto' && primaDOggi(x.rec) && (x.rec.righe || []).every(r => !(Number(r.consegnato) > 0)));
+
         return {
             ra: raDaEliminare,
             oa: oaDaEliminare,
-            op: opDaEliminare
+            op: opDaEliminare,
+            ov: ovDaEliminare
         };
     }
     async function eseguiPuliziaCorso(analisi) {
@@ -1817,6 +1824,10 @@
             idx: x.idx
         })));
         await _eliminaRawPerProvenienza(analisi.op.map(x => ({
+            fullKey: x.fullKey,
+            idx: x.idx
+        })));
+        await _eliminaRawPerProvenienza((analisi.ov || []).map(x => ({
             fullKey: x.fullKey,
             idx: x.idx
         })));
@@ -1872,19 +1883,20 @@
 
                 <div style="border:1px solid #d4d0c0; padding:10px; margin:14px 0 0 0; text-align:left;">
                   <strong style="font-size:12px;">🧹 Pulizia massiva dati non elaborati (prima di oggi)</strong>
-                  <p style="font-size:10.5px; color:#8a8a80; margin:4px 0 8px 0;">Elimina in blocco, per il corso scelto: richieste d'acquisto ancora aperte, ordini d'acquisto senza nessuna riga ricevuta e ordini di produzione non confermati — tutti creati prima di oggi. Lavora sui dati grezzi (non sul sistema di patch), quindi funziona anche sui casi con numero documento duplicato che a volte impediscono l'eliminazione singola dalla schermata normale.</p>
+                  <p style="font-size:10.5px; color:#8a8a80; margin:4px 0 8px 0;">Elimina in blocco, per il corso scelto: richieste d'acquisto ancora aperte, ordini d'acquisto senza nessuna riga ricevuta, ordini di produzione non confermati e ordini di vendita senza nessuna riga consegnata — tutti creati prima di oggi. Lavora sui dati grezzi (non sul sistema di patch), quindi funziona anche sui casi con numero documento duplicato che a volte impediscono l'eliminazione singola dalla schermata normale.</p>
                   <select id="admin-pulizia-corso" style="width:100%; margin-bottom:8px;">
                     <option value="">-- seleziona corso --</option>
                     ${corsiRegistrati.map(c => `<option value="${c.codice}" ${adminPulizia.corso === c.codice ? 'selected' : ''}>${c.codice}</option>`).join('')}
                   </select>
                   <button id="admin-pulizia-analizza-btn" ${!adminPulizia.corso ? 'disabled' : ''} style="background:#3a5a8c; width:100%;">🔍 Analizza</button>
-                  ${adminPulizia.analisi ? (() => {const a = adminPulizia.analisi;const totale = a.ra.length + a.oa.length + a.op.length;if (totale === 0)return `<p style="font-size:11px; color:#1a6b2e; margin-top:8px;">Nessun elemento da eliminare per ${adminPulizia.corso}: non ci sono RA aperte, OA non ricevuti o OP non confermati creati prima di oggi.</p>`;return `
+                  ${adminPulizia.analisi ? (() => {const a = adminPulizia.analisi;const ov = a.ov || [];const totale = a.ra.length + a.oa.length + a.op.length + ov.length;if (totale === 0)return `<p style="font-size:11px; color:#1a6b2e; margin-top:8px;">Nessun elemento da eliminare per ${adminPulizia.corso}: non ci sono RA aperte, OA non ricevuti, OP non confermati o OV non consegnati creati prima di oggi.</p>`;return `
                           <div style="margin-top:8px; font-size:11px;">
                             <p style="margin:0 0 4px 0;">Trovati <strong>${totale}</strong> elementi da eliminare in <strong>${adminPulizia.corso}</strong>:</p>
                             <ul style="margin:0 0 8px 18px; padding:0;">
                               <li>${a.ra.length} richiesta/e d'acquisto aperta/e: ${a.ra.slice(0, 8).map(x => x.rec.numero).join(', ')}${a.ra.length > 8 ? '…' : ''}</li>
                               <li>${a.oa.length} ordine/i d'acquisto senza ricezioni: ${a.oa.slice(0, 8).map(x => x.rec.numero).join(', ')}${a.oa.length > 8 ? '…' : ''}</li>
                               <li>${a.op.length} ordine/i di produzione non confermato/i: ${a.op.slice(0, 8).map(x => x.rec.numero).join(', ')}${a.op.length > 8 ? '…' : ''}</li>
+                              <li>${ov.length} ordine/i di vendita senza consegne: ${ov.slice(0, 8).map(x => x.rec.numero).join(', ')}${ov.length > 8 ? '…' : ''}</li>
                             </ul>
                             <p style="font-size:10.5px; color:#a86a1a; margin:0 0 8px 0;">Consigliato: scarica prima un backup del corso (pulsante 📥 backup qui sopra).</p>
                             <input type="text" id="admin-pulizia-confirm" placeholder="Scrivi ELIMINA per confermare" autocomplete="off" style="text-transform:uppercase; border-color:#a83232; margin-bottom:8px;">
