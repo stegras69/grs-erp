@@ -373,7 +373,15 @@
 
           .tablewrap { background:white; margin:8px 10px 10px 10px; border:1px solid #8f8f8f; }
           table { width:100%; border-collapse:collapse; font-size:11px; }
-          th { background:#e5e0cc; text-align:left; padding:5px 8px; border-bottom:1px solid #c8c2a8; border-right:1px solid #c8c2a8; font-weight:600; white-space:nowrap; position:sticky; top: calc(var(--header-h) + var(--screen-top-h)); z-index:50; }
+          th { background:#e5e0cc; text-align:left; padding:5px 8px; border-bottom:1px solid #c8c2a8; border-right:1px solid #c8c2a8; font-weight:600; white-space:nowrap; }
+          /* L'intestazione "fissa" durante lo scroll deve valere SOLO per la prima tabella di una schermata
+             (quella principale). Applicarla a "th" in generale rompe le schermate con più tabelle piccole in
+             sequenza nello stesso contenitore di scroll (es. MF50: una tabella per linea/prodotto): ogni
+             intestazione competerebbe per la stessa posizione "sticky", dando l'impressione che la prima
+             tabella (es. "LINEA 1") resti incollata in cima e "inglobi" visivamente le righe delle tabelle
+             successive che scorrono sotto. La classe .tablewrap-sticky-head viene assegnata via JS solo
+             alla prima .tablewrap della schermata (applicaLayoutSticky). */
+          .tablewrap-sticky-head thead th { position:sticky; top: calc(var(--header-h) + var(--screen-top-h)); z-index:50; }
           td { padding:4px 8px; border-bottom:1px solid #e0ddce; border-right:1px solid #e0ddce; }
           tr:hover td { background:#f4f4ee; }
           .rowaction { color:#2e5aa8; cursor:pointer; text-decoration:underline; font-size:10.5px; margin-right:8px; }
@@ -2442,6 +2450,13 @@
         } else {
             document.documentElement.style.setProperty('--screen-top-h', '0px');
         }
+        // L'intestazione sticky (vedi CSS .tablewrap-sticky-head) va SOLO sulla prima tabella della
+        // schermata, cercata in tutta la sottoalbero (non solo tra i figli diretti di #screen-content):
+        // su MF50 le tabelle sono annidate dentro vari div (una per linea, una per prodotto) e se ogni
+        // th diventasse sticky si "accavallerebbero" tutte sulla stessa posizione durante lo scroll.
+        const primaTabella = cont.querySelector('.tablewrap');
+        if (primaTabella)
+            primaTabella.classList.add('tablewrap-sticky-head');
     }
     window.addEventListener('resize', () => {
         if (document.getElementById('screen-content'))
