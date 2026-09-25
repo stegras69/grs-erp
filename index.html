@@ -2935,7 +2935,11 @@
         return d;
     }
     function isoDate(d) {
-        return d.toISOString().slice(0, 10);
+        // NB: NON usare toISOString() qui — converte in UTC, e in Italia (UTC+1/+2) la mezzanotte
+        // locale può "scivolare" al giorno prima nella rappresentazione UTC, disallineando di un
+        // giorno tutte le date dei bucket rispetto alle date reali (es. dataRichiesta) inserite
+        // dagli utenti tramite <input type="date">. Costruiamo la stringa dai campi locali.
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     }
     function fmtGG_MM(d) {
         return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0');
@@ -3056,7 +3060,10 @@
 
         // ---- Recap per linea: produzione totale pianificata, con più codici possibili sulla stessa linea ----
         function recapPerLineaHTML() {
-            const lineeChiavi = [...lineeProduzione.map(l => l.codice)];
+            // Set: se per dati storici esistono più record linea con lo stesso codice (possibile con
+            // vecchi dati duplicati), evita di renderizzare più blocchi identici sovrapposti per la
+            // stessa linea ("si ammucchiano").
+            const lineeChiavi = [...new Set(lineeProduzione.map(l => l.codice))];
             const haNonAssegnata = ordiniProduzione.some(o => o.stato === 'aperto' && !o.linea);
             if (haNonAssegnata)
                 lineeChiavi.push('(non assegnata)');
@@ -3089,8 +3096,8 @@
                 ).join('');
 
                 return `
-                        <div style="margin:0 0 10px 0;">
-                          <div class="tablewrap" style="margin:0;">
+                        <div style="margin:0 0 18px 0; padding-bottom:6px; border-bottom:2px solid #d8d8c8;">
+                          <div class="tablewrap" style="margin:0 0 0 0;">
                             <table style="min-width:${140 + buckets.length * 52}px;">
                               <thead><tr><th style="min-width:150px;">${nomeLinea}${capacitaMax > 0 ? ` <span style="font-weight:400; font-size:9.5px; color:#5a6470;">(max ${capacitaMax}/g)</span>` : ''}</th>${buckets.map(b => `<th style="text-align:center; min-width:48px; font-size:10px; ${b.speciale ? 'color:#a83232; background:#fbeaea;' : ''} ${b.oggi ? 'text-decoration:underline;' : ''}">${b.label}</th>`).join('')}</tr></thead>
                               <tbody>
@@ -3140,14 +3147,19 @@
                 baselinePerLinea[l || '_'] = existingPlanPerWeek(r.codice, l);
             });
 
+            // NB: mf50CellDraft NON è più il "totale" della cella, ma la quantità AGGIUNTIVA da
+            // generare ora, sopra a quanto già pianificato (baselinePerLinea, sempre mostrato in
+            // chiaro nella riga "Già programmato" qui sotto, mai editabile). Così il già-programmato
+            // resta sempre visibile e non può mai sembrare "vuoto", e un secondo click su "Genera"
+            // senza aver scritto nulla di nuovo non ricrea nulla (il campo riparte sempre da vuoto).
             function pianificatoTotWeekCorrente() {
                 const tot = new Array(buckets.length).fill(0);
                 lineeRiga.forEach(l => {
                     const key = l || '_';
                     for (let i = 0; i < buckets.length; i++) {
                         const cellKey = `${r.codice}::${key}::${i}`;
-                        const val = mf50CellDraft[cellKey] !== undefined ? Number(mf50CellDraft[cellKey]) : baselinePerLinea[key][i];
-                        tot[i] += (val || 0);
+                        const daAggiungere = mf50CellDraft[cellKey] !== undefined ? (Number(mf50CellDraft[cellKey]) || 0) : 0;
+                        tot[i] += (baselinePerLinea[key][i] || 0) + daAggiungere;
                     }
                 });
                 return tot;
@@ -3155,12 +3167,18 @@
 
             const righeLinea = lineeRiga.map(l => {
                 const key = l || '_';
-                const cells = buckets.map((b, i) => {
-                    const cellKey = `${r.codice}::${key}::${i}`;
-                    const val = mf50CellDraft[cellKey] !== undefined ? mf50CellDraft[cellKey] : baselinePerLinea[key][i];
-                    return `<td style="padding:2px;"><input type="number" min="0" class="mat-cell" data-prodotto="${r.codice}" data-linea="${l || ''}" data-week="${i}" value="${val || ''}" placeholder="0" style="width:52px; font-size:10.5px; padding:2px; border:1px solid #b9c4d6; text-align:center;"></td>`;
+                const cellsGiaProgrammato = buckets.map((b, i) => {
+                    const v = baselinePerLinea[key][i];
+                    return `<td style="text-align:center; font-size:10.5px; ${v > 0 ? 'font-weight:600; color:#1a6b2e;' : 'color:#9a9a8f;'}">${v || ''}</td>`;
                 }).join('');
-                return `<tr><td style="padding-left:14px; color:#3a5a8c; white-space:nowrap;">↳ Pianificato ${l ? '(' + l + ')' : '(nessuna linea)'}</td>${cells}</tr>`;
+                const cellsDaAggiungere = buckets.map((b, i) => {
+                    const cellKey = `${r.codice}::${key}::${i}`;
+                    const val = mf50CellDraft[cellKey] !== undefined ? mf50CellDraft[cellKey] : '';
+                    return `<td style="padding:2px;"><input type="number" min="0" class="mat-cell" data-prodotto="${r.codice}" data-linea="${l || ''}" data-week="${i}" value="${val}" placeholder="0" style="width:52px; font-size:10.5px; padding:2px; border:1px solid #b9c4d6; text-align:center;"></td>`;
+                }).join('');
+                const etichettaLinea = l ? '(' + l + ')' : '(nessuna linea)';
+                return `<tr><td style="padding-left:14px; color:#1a6b2e; white-space:nowrap;">✓ Già programmato ${etichettaLinea}</td>${cellsGiaProgrammato}</tr>` +
+                `<tr><td style="padding-left:14px; color:#3a5a8c; white-space:nowrap;">↳ Da aggiungere ora ${etichettaLinea}</td>${cellsDaAggiungere}</tr>`;
             }).join('');
 
             const pianificatoTot = pianificatoTotWeekCorrente();
@@ -3207,7 +3225,7 @@
               ${recapPerLineaHTML()}
               <div style="margin:0 10px 6px 10px; border-top:2px solid #b9c4d6; padding-top:10px;">
                 <strong style="font-size:13px;">📅 Piano per prodotto — scrivi qui per pianificare</strong>
-                <p style="font-size:10.5px; color:#8a8a80; margin:2px 0 10px 0;">Colonne giornaliere per i prossimi 14 giorni, poi settimanali. Ogni cella è la quantità pianificata per quel periodo su quella linea. "Giacenza proiettata" è la giacenza attesa a fine periodo se tutto va come pianificato: se scende sotto zero, la copertura non basta ancora.</p>
+                <p style="font-size:10.5px; color:#8a8a80; margin:2px 0 10px 0;">Colonne giornaliere per i prossimi 14 giorni, poi settimanali. La riga "✓ Già programmato" (sola lettura, sempre visibile) mostra quanto è già stato generato in ordini di produzione per quel giorno/linea. La riga "↳ Da aggiungere ora" è dove scrivi SOLO la quantità aggiuntiva da generare: parte sempre vuota, così un click su "Genera" senza nuovi numeri non crea nulla di duplicato. "Giacenza proiettata" è la giacenza attesa a fine periodo se tutto va come pianificato (già programmato + da aggiungere ora): se scende sotto zero, la copertura non basta ancora.</p>
                 ${matriciHTML || '<p style="font-size:11px;color:#9a9a8f; margin-left:10px;">Nessun prodotto con distinta base da pianificare. Crea prima una BOM in CS01.</p>'}
               </div>
             </div>
@@ -3240,8 +3258,8 @@
                     const baseline = existingPlanPerWeek(prodotto, l);
                     for (let i = 0; i < buckets.length; i++) {
                         const ck = `${prodotto}::${key}::${i}`;
-                        const val = mf50CellDraft[ck] !== undefined ? Number(mf50CellDraft[ck]) : baseline[i];
-                        pianificatoTot[i] += (val || 0);
+                        const daAggiungere = mf50CellDraft[ck] !== undefined ? (Number(mf50CellDraft[ck]) || 0) : 0;
+                        pianificatoTot[i] += (baseline[i] || 0) + daAggiungere;
                     }
                 });
                 let run = r.giacenza;
@@ -3272,13 +3290,14 @@
 
                 for (const l of lineeRiga) {
                     const key = l || '_';
-                    const baseline = existingPlanPerWeek(prodotto, l);
                     for (let i = 0; i < buckets.length; i++) {
                         const cellKey = `${prodotto}::${key}::${i}`;
                         if (mf50CellDraft[cellKey] === undefined)
                             continue;
-                        const current = Number(mf50CellDraft[cellKey]) || 0;
-                        const delta = current - baseline[i];
+                        // Il campo "Da aggiungere ora" contiene già la quantità AGGIUNTIVA da generare
+                        // (non più un totale da cui sottrarre il già-programmato): niente più ambiguità
+                        // tra "quanto c'era" e "quanto scrivo".
+                        const delta = Number(mf50CellDraft[cellKey]) || 0;
                         if (delta > 0) {
                             const rec = {
                                 numero: await prossimoNumero('OP'),
