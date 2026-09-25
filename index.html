@@ -3058,13 +3058,75 @@
         return buckets.length - 1; // oltre l'orizzonte visibile: accumula sull'ultima colonna
     }
 
+    // ---- Bucket per MF50: colonna unica per l'arretrato, poi giornaliero da oggi fino al venerdì
+    // della terza settimana (inclusa), poi settimanale. Diversa da generateWeekBuckets (usata da MD01,
+    // che parte dal lunedì della settimana corrente e mostra ogni giorno passato/futuro separatamente):
+    // qui il passato va compresso in un'unica colonna aggregata, come richiesto per il piano di
+    // produzione (il dettaglio giorno-per-giorno del passato non serve più una volta trascorso).
+    function generateBucketsMF50(nSettimaneDopo=8) {
+        const buckets = [];
+        const oggi = new Date();
+        oggi.setHours(0, 0, 0, 0);
+        const ieri = new Date(oggi);
+        ieri.setDate(ieri.getDate() - 1);
+        // Colonna 0: tutto il passato aggregato in un'unica colonna. Un eventuale nuovo ordine generato
+        // da qui (per coprire arretrato) va datato "oggi" (creaDataISO), dato che non si può pianificare
+        // produzione nel passato.
+        buckets.push({
+            label: '⚠ Arretrato',
+            startISO: '0001-01-01',
+            endISO: isoDate(ieri),
+            speciale: false,
+            oggi: false,
+            arretrato: true,
+            creaDataISO: isoDate(oggi),
+        });
+        // Giornaliero da oggi fino al venerdì della terza settimana (settimana corrente = 1a).
+        const lunediSettimanaCorrente = mondayOf(oggi);
+        const venerdiTerzaSettimana = new Date(lunediSettimanaCorrente);
+        venerdiTerzaSettimana.setDate(venerdiTerzaSettimana.getDate() + 18); // lun sett.1 + 18gg = ven sett.3
+        const cursorGiorno = new Date(oggi);
+        while (cursorGiorno <= venerdiTerzaSettimana) {
+            const d = new Date(cursorGiorno);
+            const nomeGiorno = ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab'][d.getDay()];
+            const iso = isoDate(d);
+            buckets.push({
+                label: nomeGiorno + ' ' + fmtGG_MM(d),
+                startISO: iso,
+                endISO: iso,
+                speciale: isWeekendOFestivo(d),
+                oggi: iso === isoDate(oggi),
+                creaDataISO: iso
+            });
+            cursorGiorno.setDate(cursorGiorno.getDate() + 1);
+        }
+        // Settimanale dopo, a partire dal lunedì della 4a settimana.
+        const inizioSettimanali = new Date(lunediSettimanaCorrente);
+        inizioSettimanali.setDate(inizioSettimanali.getDate() + 21);
+        for (let i = 0; i < nSettimaneDopo; i++) {
+            const s = new Date(inizioSettimanali);
+            s.setDate(s.getDate() + i * 7);
+            const e = new Date(s);
+            e.setDate(e.getDate() + 6);
+            buckets.push({
+                label: `S${weekNumber(s)} (${fmtGG_MM(s)})`,
+                startISO: isoDate(s),
+                endISO: isoDate(e),
+                speciale: false,
+                oggi: false,
+                creaDataISO: isoDate(s)
+            });
+        }
+        return buckets;
+    }
+
     function mf50Key(codice, linea) {
         return codice + '::' + (linea || '_');
     }
 
     function renderMF50(el) {
         const prodottiFiniti = materiali.filter(m => m.tipo === 'PF');
-        const buckets = generateWeekBuckets(14, 8);
+        const buckets = generateBucketsMF50();
 
         const righeCalc = prodottiFiniti.map(p => {
             const {totale, dataMinima} = demandForProduct(p.codice);
@@ -3129,7 +3191,7 @@
                         <div style="margin:0 0 18px 0; padding-bottom:6px; border-bottom:2px solid #d8d8c8;">
                           <div class="tablewrap" style="margin:0 0 0 0;">
                             <table style="min-width:${140 + buckets.length * 52}px;">
-                              <thead><tr><th style="min-width:150px;">${nomeLinea}${capacitaMax > 0 ? ` <span style="font-weight:400; font-size:9.5px; color:#5a6470;">(max ${capacitaMax}/g)</span>` : ''}</th>${buckets.map(b => `<th style="text-align:center; min-width:48px; font-size:10px; ${b.speciale ? 'color:#a83232; background:#fbeaea;' : ''} ${b.oggi ? 'text-decoration:underline;' : ''}">${b.label}</th>`).join('')}</tr></thead>
+                              <thead><tr><th style="min-width:150px;">${nomeLinea}${capacitaMax > 0 ? ` <span style="font-weight:400; font-size:9.5px; color:#5a6470;">(max ${capacitaMax}/g)</span>` : ''}</th>${buckets.map(b => `<th style="text-align:center; min-width:48px; font-size:10px; ${b.arretrato ? 'background:#ffe0b3; color:#8a4a00; font-weight:700;' : (b.speciale ? 'color:#a83232; background:#fbeaea;' : '')} ${b.oggi ? 'text-decoration:underline;' : ''}">${b.label}</th>`).join('')}</tr></thead>
                               <tbody>
                                 <tr style="background:#f4f4ee; font-weight:600;"><td>Totale linea</td>${totalePerBucket.map((v, i) => {const sopraCapacita = capacitaMax > 0 && v > capacitaMax && !buckets[i].label.startsWith('S');return `<td style="text-align:center; ${sopraCapacita ? 'color:#a83232; background:#fbeaea;' : ''}" ${sopraCapacita ? `title="Supera la capacità massima della linea (${capacitaMax}/giorno)"` : ''}>${v || 0}${sopraCapacita ? ' ⚠' : ''}</td>`;}).join('')}</tr>
                                 ${righeCodici || '<tr><td colspan="' + (buckets.length + 1) + '" style="text-align:center;color:#9a9a8f;font-size:10.5px;padding:4px;">Nessun ordine pianificato su questa linea.</td></tr>'}
@@ -3228,7 +3290,7 @@
                     <div class="tablewrap" style="margin:0;">
                       <table style="min-width:${140 + buckets.length * 60}px;">
                         <thead>
-                          <tr><th style="min-width:150px;">Dato</th>${buckets.map(b => `<th style="text-align:center; min-width:56px; font-size:10px; ${b.speciale ? 'color:#a83232; background:#fbeaea;' : ''} ${b.oggi ? 'text-decoration:underline;' : ''}">${b.label}</th>`).join('')}</tr>
+                          <tr><th style="min-width:150px;">Dato</th>${buckets.map(b => `<th style="text-align:center; min-width:56px; font-size:10px; ${b.arretrato ? 'background:#ffe0b3; color:#8a4a00; font-weight:700;' : (b.speciale ? 'color:#a83232; background:#fbeaea;' : '')} ${b.oggi ? 'text-decoration:underline;' : ''}">${b.label}</th>`).join('')}</tr>
                         </thead>
                         <tbody>
                           <tr style="background:#f4f4ee;"><td>Giacenza proiettata</td>${giacenzaProiettata.map(v => `<td class="proiezione-cell" style="text-align:center; font-weight:600; color:${v < 0 ? '#a83232' : '#1a6b2e'};">${v}</td>`).join('')}</tr>
@@ -3248,14 +3310,14 @@
 
         el.innerHTML = `
             <div class="formwrap" style="padding-bottom:0;">
-              <p style="font-size:11px;color:#5a6470;margin:0 0 4px 0;">Scrivi direttamente nella matrice le quantità da produrre (giornaliero nei prossimi 14 giorni, poi settimanale), poi conferma: verranno creati gli ordini di produzione necessari. Le pianificazioni non verificano ancora la capacità della linea (gestione futura).</p>
+              <p style="font-size:11px;color:#5a6470;margin:0 0 4px 0;">Scrivi direttamente nella matrice le quantità da produrre (il passato è raggruppato in un'unica colonna "⚠ Arretrato", da oggi al venerdì della 3ª settimana è giornaliero, poi settimanale), poi conferma: verranno creati gli ordini di produzione necessari. Le pianificazioni non verificano ancora la capacità della linea (gestione futura).</p>
             </div>
             <div style="flex:1; overflow:auto;">
               ${lineeProduzione.length === 0 ? '<p style="font-size:11px;color:#a83232;margin:0 10px 10px 10px;">Nessuna linea di produzione definita: crearle in CR01 per vedere il recap qui sotto.</p>' : ''}
               ${recapPerLineaHTML()}
               <div style="margin:0 10px 6px 10px; border-top:2px solid #b9c4d6; padding-top:10px;">
                 <strong style="font-size:13px;">📅 Piano per prodotto — scrivi qui per pianificare</strong>
-                <p style="font-size:10.5px; color:#8a8a80; margin:2px 0 10px 0;">Colonne giornaliere per i prossimi 14 giorni, poi settimanali. La riga "✓ Già programmato" (sola lettura, sempre visibile) mostra quanto è già stato generato in ordini di produzione per quel giorno/linea. La riga "↳ Da aggiungere ora" è dove scrivi SOLO la quantità aggiuntiva da generare: parte sempre vuota, così un click su "Genera" senza nuovi numeri non crea nulla di duplicato. "Giacenza proiettata" è la giacenza attesa a fine periodo se tutto va come pianificato (già programmato + da aggiungere ora): se scende sotto zero, la copertura non basta ancora.</p>
+                <p style="font-size:10.5px; color:#8a8a80; margin:2px 0 10px 0;">Colonna "⚠ Arretrato": tutto ciò che è nel passato, aggregato in un unico totale (un nuovo ordine generato da qui viene datato ad oggi). Da oggi fino al venerdì della 3ª settimana: colonne giornaliere. Da lì in poi: colonne settimanali. La riga "✓ Già programmato" (sola lettura, sempre visibile) mostra quanto è già stato generato in ordini di produzione per quel periodo/linea. La riga "↳ Da aggiungere ora" è dove scrivi SOLO la quantità aggiuntiva da generare: parte sempre vuota, così un click su "Genera" senza nuovi numeri non crea nulla di duplicato. "Giacenza proiettata" è la giacenza attesa a fine periodo se tutto va come pianificato (già programmato + da aggiungere ora): se scende sotto zero, la copertura non basta ancora.</p>
                 ${matriciHTML || '<p style="font-size:11px;color:#9a9a8f; margin-left:10px;">Nessun prodotto con distinta base da pianificare. Crea prima una BOM in CS01.</p>'}
               </div>
             </div>
@@ -3335,7 +3397,7 @@
                                 quantita: delta,
                                 origine: 'MF50/MRP (piano settimanale)',
                                 stato: 'aperto',
-                                dataPianificata: buckets[i].startISO,
+                                dataPianificata: buckets[i].creaDataISO || buckets[i].startISO,
                                 linea: l,
                                 componenti: bom.componenti.map(c => ({
                                     codice: c.codice,
@@ -3770,7 +3832,7 @@
                           </div>
                           <div class="tablewrap" style="margin:0;">
                             <table style="min-width:${140 + buckets.length * 52}px;">
-                              <thead><tr><th style="min-width:150px;">Dato</th>${buckets.map(b => `<th style="text-align:center; min-width:48px; font-size:10px; ${b.speciale ? 'color:#a83232; background:#fbeaea;' : ''} ${b.oggi ? 'text-decoration:underline;' : ''}">${b.label}</th>`).join('')}</tr></thead>
+                              <thead><tr><th style="min-width:150px;">Dato</th>${buckets.map(b => `<th style="text-align:center; min-width:48px; font-size:10px; ${b.arretrato ? 'background:#ffe0b3; color:#8a4a00; font-weight:700;' : (b.speciale ? 'color:#a83232; background:#fbeaea;' : '')} ${b.oggi ? 'text-decoration:underline;' : ''}">${b.label}</th>`).join('')}</tr></thead>
                               <tbody>
                                 <tr style="background:#f4f4ee;"><td>Giacenza proiettata</td>${proiezione.map(v => `<td class="proiezione-md01-cell" style="text-align:center; font-weight:600; color:${v < 0 ? '#a83232' : '#1a6b2e'};">${v}</td>`).join('')}</tr>
                                 <tr><td>Fabbisogno lordo (ODP)</td>${dati.lordo.map(v => `<td style="text-align:center; font-size:10.5px;">${v || ''}</td>`).join('')}</tr>
