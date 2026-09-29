@@ -362,65 +362,91 @@
 
         /* Lista a selezione multipla in stile SAP (sostituisce il 
         
-        <select multiple> nativo, che con
-             tante voci diventa un "banner" poco leggibile): riquadro con bordo, scroll interno, righe
-             alternate, evidenziazione al passaggio del mouse. */
-          .selectlist-sap { border:1px solid #7f9db9; background:white; overflow-y:auto; }
-          .selectlist-sap-row { display:flex; align-items:center; gap:6px; padding:3px 8px; font-size:11px; cursor:pointer; border-bottom:1px solid #eee; }
-          .selectlist-sap-row:nth-child(even) { background:#f7f7f2; }
-          .selectlist-sap-row:hover { background:#dfe6f0; }
-          .selectlist-sap-row input[type="checkbox"] { margin:0; cursor:pointer; }
+        <select multiple>
+             nativo, che con
+                 tante voci diventa un "banner" poco leggibile): riquadro con bordo, scroll interno, righe
+                 alternate, evidenziazione al passaggio del mouse. */
+              .selectlist-sap { border:1px solid #7f9db9; background:white; overflow-y:auto; }
+              .selectlist-sap-row { display:flex; align-items:center; gap:6px; padding:3px 8px; font-size:11px; cursor:pointer; border-bottom:1px solid #eee; }
+              .selectlist-sap-row:nth-child(even) { background:#f7f7f2; }
+              .selectlist-sap-row:hover { background:#dfe6f0; }
+              .selectlist-sap-row input[type="checkbox"] { margin:0; cursor:pointer; }
 
-          .tablewrap { background:white; margin:8px 10px 10px 10px; border:1px solid #8f8f8f; }
-          table { width:100%; border-collapse:collapse; font-size:11px; }
-          th { background:#e5e0cc; text-align:left; padding:5px 8px; border-bottom:1px solid #c8c2a8; border-right:1px solid #c8c2a8; font-weight:600; white-space:nowrap; }
-          /* L'intestazione "fissa" durante lo scroll deve valere SOLO per la prima tabella di una schermata
-             (quella principale). Applicarla a "th" in generale rompe le schermate con più tabelle piccole in
-             sequenza nello stesso contenitore di scroll (es. MF50: una tabella per linea/prodotto): ogni
-             intestazione competerebbe per la stessa posizione "sticky", dando l'impressione che la prima
-             tabella (es. "LINEA 1") resti incollata in cima e "inglobi" visivamente le righe delle tabelle
-             successive che scorrono sotto. La classe .tablewrap-sticky-head viene assegnata via JS solo
-             alla prima .tablewrap della schermata (applicaLayoutSticky). */
-          .tablewrap-sticky-head thead th { position:sticky; top: calc(var(--header-h) + var(--screen-top-h)); z-index:50; }
-          td { padding:4px 8px; border-bottom:1px solid #e0ddce; border-right:1px solid #e0ddce; }
-          tr:hover td { background:#f4f4ee; }
-          .rowaction { color:#2e5aa8; cursor:pointer; text-decoration:underline; font-size:10.5px; margin-right:8px; }
-          .rowaction.danger { color:#a83232; }
+              .tablewrap { background:white; margin:8px 10px 10px 10px; border:1px solid #8f8f8f; }
+              table { width:100%; border-collapse:collapse; font-size:11px; }
+              th { background:#e5e0cc; text-align:left; padding:5px 8px; border-bottom:1px solid #c8c2a8; border-right:1px solid #c8c2a8; font-weight:600; white-space:nowrap; }
+              /* L'intestazione "fissa" durante lo scroll deve valere SOLO per la prima tabella di una schermata
+                 (quella principale). Applicarla a "th" in generale rompe le schermate con più tabelle piccole in
+                 sequenza nello stesso contenitore di scroll (es. MF50: una tabella per linea/prodotto): ogni
+                 intestazione competerebbe per la stessa posizione "sticky", dando l'impressione che la prima
+                 tabella (es. "LINEA 1") resti incollata in cima e "inglobi" visivamente le righe delle tabelle
+                 successive che scorrono sotto. La classe .tablewrap-sticky-head viene assegnata via JS solo
+                 alla prima .tablewrap della schermata (applicaLayoutSticky). */
+              .tablewrap-sticky-head thead th { position:sticky; top: calc(var(--header-h) + var(--screen-top-h)); z-index:50; }
+              td { padding:4px 8px; border-bottom:1px solid #e0ddce; border-right:1px solid #e0ddce; }
+              tr:hover td { background:#f4f4ee; }
+              .rowaction { color:#2e5aa8; cursor:pointer; text-decoration:underline; font-size:10.5px; margin-right:8px; }
+              .rowaction.danger { color:#a83232; }
 
-          .statusbar { display:flex; align-items:center; justify-content:space-between; padding:3px 8px; background:#ece9d8; border-top:1px solid #b5b5b5; font-size:10.5px; color:#4a4a4a; }
-          .statusbar .right { display:flex; gap:12px; }
-          .msg-ok { color:#1a6b2e; font-weight:600; }
-          .msg-err { color:#a83232; font-weight:600; }
+              .statusbar { display:flex; align-items:center; justify-content:space-between; padding:3px 8px; background:#ece9d8; border-top:1px solid #b5b5b5; font-size:10.5px; color:#4a4a4a; }
+              .statusbar .right { display:flex; gap:12px; }
+              .msg-ok { color:#1a6b2e; font-weight:600; }
+              .msg-err { color:#a83232; font-weight:600; }
 
-          /* Login overlay */
-          .login-overlay { position:fixed; inset:0; background:#1f3a5f; display:flex; align-items:center; justify-content:center; z-index:999; }
-          .login-box { background:#ece9d8; border:2px solid #7f9db9; padding:24px 28px; width:320px; box-shadow:0 8px 24px rgba(0,0,0,.3); }
-          .login-box h2 { margin:0 0 4px 0; font-size:15px; color:#1a1a1a; }
-          .login-box p { margin:0 0 16px 0; font-size:11px; color:#5a6470; }
-          .login-box input { width:100%; padding:8px; font-size:12px; border:1px solid #7f9db9; margin-bottom:12px; font-family:inherit; }
-          .login-box button { width:100%; padding:9px; font-size:12px; font-weight:600; background:#2e5aa8; color:white; border:1px solid #1f3a5f; cursor:pointer; }
-          .login-box button:hover { background:#3a6ac0; }
-          .login-note { margin-top:14px; font-size:10px; color:#8a8a80; line-height:1.4; }
+              /* Login overlay */
+              .login-overlay { position:fixed; inset:0; background:#1f3a5f; display:flex; align-items:center; justify-content:center; z-index:999; }
+              .login-box { background:#ece9d8; border:2px solid #7f9db9; padding:24px 28px; width:320px; box-shadow:0 8px 24px rgba(0,0,0,.3); }
+              .login-box h2 { margin:0 0 4px 0; font-size:15px; color:#1a1a1a; }
+              .login-box p { margin:0 0 16px 0; font-size:11px; color:#5a6470; }
+              .login-box input { width:100%; padding:8px; font-size:12px; border:1px solid #7f9db9; margin-bottom:12px; font-family:inherit; }
+              .login-box button { width:100%; padding:9px; font-size:12px; font-weight:600; background:#2e5aa8; color:white; border:1px solid #1f3a5f; cursor:pointer; }
+              .login-box button:hover { background:#3a6ac0; }
+              .login-note { margin-top:14px; font-size:10px; color:#8a8a80; line-height:1.4; }
 
-          .storage-warning { background:#fff3cd; color:#7a5a00; border-bottom:1px solid #e0c060; padding:5px 10px; font-size:10.5px; text-align:center; }
-          .semaforo { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; vertical-align:middle; border:1px solid rgba(0,0,0,.35); box-shadow: inset 0 0 1px rgba(255,255,255,.6); }
-          .semaforo-verde { background: radial-gradient(circle at 30% 30%, #7fe08a, #1a8a2e); }
-          .semaforo-giallo { background: radial-gradient(circle at 30% 30%, #ffe58a, #d9a300); }
-          .semaforo-rosso { background: radial-gradient(circle at 30% 30%, #ff8a8a, #b0201f); }
-          .stato-badge { display:inline-flex; align-items:center; font-weight:600; }
-          .print-btn { color:#2e5aa8; cursor:pointer; text-decoration:underline; font-size:10.5px; }
-          #print-area { position:fixed; inset:0; background:#c7c7c7; overflow:auto; z-index:2000; }
-          @media print {
-            body * { visibility: hidden; }
-            #print-area, #print-area * { visibility: visible; }
-            #print-area { display:block !important; position: absolute; top:0; left:0; width:100%; background:white; }
-            .print-toolbar { display:none !important; }
-          }
+              .storage-warning { background:#fff3cd; color:#7a5a00; border-bottom:1px solid #e0c060; padding:5px 10px; font-size:10.5px; text-align:center; }
+              .semaforo { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; vertical-align:middle; border:1px solid rgba(0,0,0,.35); box-shadow: inset 0 0 1px rgba(255,255,255,.6); }
+              .semaforo-verde { background: radial-gradient(circle at 30% 30%, #7fe08a, #1a8a2e); }
+              .semaforo-giallo { background: radial-gradient(circle at 30% 30%, #ffe58a, #d9a300); }
+              .semaforo-rosso { background: radial-gradient(circle at 30% 30%, #ff8a8a, #b0201f); }
+              .stato-badge { display:inline-flex; align-items:center; font-weight:600; }
+              .print-btn { color:#2e5aa8; cursor:pointer; text-decoration:underline; font-size:10.5px; }
+              #print-area { position:fixed; inset:0; background:#c7c7c7; overflow:auto; z-index:2000; }
+              @media print {
+                body * { visibility: hidden; }
+                #print-area, #print-area * { visibility: visible; }
+                #print-area { display:block !important; position: absolute; top:0; left:0; width:100%; background:white; }
+                .print-toolbar { display:none !important; }
+              }
+
+              /* ============ SAP-LIKE: schede (tab) per le schermate multi-sezione, stile MM01 reale ============ */
+              .sap-tabs { display:flex; flex-wrap:wrap; border-bottom:2px solid #7f9db9; margin:0 0 10px 0; }
+              .sap-tab { padding:6px 14px; font-size:11.5px; font-weight:600; cursor:pointer; user-select:none; background:#d8d4c0; border:1px solid #b5b0a0; border-bottom:none; margin-right:2px; color:#5a5a50; }
+              .sap-tab:hover { background:#e5e0cc; }
+              .sap-tab-attivo, .sap-tab-attivo:hover { background:white; color:#1a1a1a; border-color:#7f9db9; position:relative; top:2px; padding-top:8px; }
+
+              /* ============ SAP-LIKE: campo con aiuto ricerca F4 (al posto delle 
+            <select> semplici) ============ */
+              .f4-field-row { display:flex; gap:4px; }
+              .f4-field-row input { flex:1; cursor:pointer; background:#fbfbf6; }
+              .f4-field-btn { background:#dfe6f0; border:1px solid #7f9db9; cursor:pointer; padding:2px 9px; font-size:12px; font-weight:600; color:#2e4a72; }
+              .f4-field-btn:hover { background:#c9d6ea; }
+              .f4-overlay { position:fixed; inset:0; background:rgba(20,20,15,0.4); z-index:3000; display:flex; align-items:flex-start; justify-content:center; padding-top:12vh; }
+              .f4-popup { background:#ece9d8; border:2px solid #3a5a8c; width:460px; max-width:92vw; max-height:70vh; display:flex; flex-direction:column; box-shadow:0 8px 28px rgba(0,0,0,0.45); }
+              .f4-popup-header { background:#3a5a8c; color:white; padding:6px 10px; font-weight:600; font-size:12px; display:flex; justify-content:space-between; align-items:center; }
+              .f4-popup-header .f4-close { cursor:pointer; padding:0 4px; }
+              .f4-popup-header .f4-close:hover { background:rgba(255,255,255,0.2); }
+              .f4-popup-search { padding:8px; border-bottom:1px solid #b9c4d6; background:white; }
+              .f4-popup-search input { width:100%; padding:5px; font-size:11.5px; border:1px solid #7f9db9; box-sizing:border-box; }
+              .f4-popup-list { overflow-y:auto; flex:1; background:white; }
+              .f4-popup-row { padding:5px 10px; font-size:11.5px; cursor:pointer; border-bottom:1px solid #eee; }
+              .f4-popup-row:nth-child(even) { background:#f7f7f2; }
+              .f4-popup-row:hover { background:#dfe6f0; }
     </style>
 </head>
 <body>
     <div id="app"></div>
     <div id="print-area" style="display:none;"></div>
+    <div id="f4-overlay-root"></div>
 
     <script>
     // ============ STORAGE HELPERS ============
@@ -2647,6 +2673,111 @@
         return c ? `${codice} - ${c.ragioneSociale}` : codice;
     }
 
+    // ============ SAP-LIKE: SCHEDE (TAB) PER LE SCHERMATE MULTI-SEZIONE ============
+    // Genera l'intestazione a schede (stile MM01 reale: "Dati base", "MRP", ecc.). Lo stato (quale
+    // scheda è attiva) resta in una variabile a livello di schermata, dichiarata dal chiamante — così
+    // cambiare scheda non tocca né azzera i dati già scritti nelle altre.
+    function renderSapTabsHTML(tabs, attivo) {
+        return `<div class="sap-tabs">${tabs.map(t => `<div class="sap-tab ${t.key === attivo ? 'sap-tab-attivo' : ''}" data-tab="${t.key}">${t.label}</div>`).join('')}</div>`;
+    }
+    // Attacca i listener di click alle schede appena renderizzate. onCambio riceve la chiave della
+    // scheda cliccata: il chiamante aggiorna la propria variabile di stato e richiama renderScreenContent().
+    function attachSapTabsListeners(onCambio) {
+        document.querySelectorAll('.sap-tab').forEach(t => {
+            t.addEventListener('click', () => onCambio(t.dataset.tab));
+        });
+    }
+
+    // ============ SAP-LIKE: CAMPO CON AIUTO RICERCA "F4" (al posto delle <select> semplici) ============
+    // Riproduce il value-help F4 di SAP: un campo di sola lettura che mostra l'etichetta scelta, con un
+    // pulsante 🔍 che apre un popup con elenco filtrabile. Più robusto delle liste "banner" (select
+    // multiple nativa) e più vicino all'esperienza SAP reale di quanto sia una <select> del browser.
+    let f4Attivo = null; // { titolo, items:[{value,label}], onSelect(value), query }
+    function apriF4(titolo, items, onSelect) {
+        f4Attivo = {
+            titolo,
+            items,
+            onSelect,
+            query: ''
+        };
+        renderF4();
+    }
+    function chiudiF4() {
+        f4Attivo = null;
+        const root = document.getElementById('f4-overlay-root');
+        if (root)
+            root.innerHTML = '';
+    }
+    function renderF4() {
+        const root = document.getElementById('f4-overlay-root');
+        if (!root)
+            return;
+        if (!f4Attivo) {
+            root.innerHTML = '';
+            return;
+        }
+        const q = f4Attivo.query.trim().toLowerCase();
+        const filtrati = q ? f4Attivo.items.filter(it => it.label.toLowerCase().includes(q)) : f4Attivo.items;
+        root.innerHTML = `
+            <div class="f4-overlay" id="f4-overlay-bg">
+              <div class="f4-popup">
+                <div class="f4-popup-header"><span>🔍 ${f4Attivo.titolo}</span><span class="f4-close" id="f4-close-btn">✕</span></div>
+                <div class="f4-popup-search"><input id="f4-search-input" type="text" placeholder="Cerca..." value="${f4Attivo.query.replace(/"/g, '&quot;')}"></div>
+                <div class="f4-popup-list">
+                  ${filtrati.length === 0 ? '<div style="padding:12px; color:#9a9a8f; font-size:11px;">Nessun risultato.</div>' : filtrati.map(it => `<div class="f4-popup-row" data-value="${it.value}">${it.label}</div>`).join('')}
+                </div>
+              </div>
+            </div>`;
+        const bg = document.getElementById('f4-overlay-bg');
+        bg.addEventListener('click', (e) => {
+            if (e.target.id === 'f4-overlay-bg')
+                chiudiF4();
+        });
+        document.getElementById('f4-close-btn').addEventListener('click', chiudiF4);
+        const searchInp = document.getElementById('f4-search-input');
+        searchInp.focus();
+        searchInp.selectionStart = searchInp.selectionEnd = searchInp.value.length;
+        searchInp.addEventListener('input', e => {
+            f4Attivo.query = e.target.value;
+            renderF4();
+        });
+        searchInp.addEventListener('keydown', e => {
+            if (e.key === 'Escape')
+                chiudiF4();
+        });
+        root.querySelectorAll('.f4-popup-row').forEach(row => {
+            row.addEventListener('click', () => {
+                const valore = row.dataset.value;
+                const cb = f4Attivo.onSelect;
+                chiudiF4();
+                cb(valore);
+            });
+        });
+    }
+    // Markup del campo F4 (input di sola lettura + pulsante 🔍). data-f4-valore porta il valore
+    // grezzo selezionato (il testo visibile è solo l'etichetta leggibile); il chiamante legge il
+    // valore dal proprio stato (aggiornato subito da onSelect), mai da .value dell'input.
+    function campoF4HTML(id, etichettaCorrente, placeholder) {
+        return `<div class="f4-field-row">
+            <input id="${id}" type="text" readonly value="${(etichettaCorrente || '').replace(/"/g, '&quot;')}" placeholder="${placeholder || '-- seleziona --'}">
+            <button type="button" class="f4-field-btn" id="${id}-btn" title="Cerca (F4)">🔍</button>
+          </div>`;
+    }
+    // Collega un campo F4 già renderizzato (per id) alla sua sorgente dati. items: [{value,label}].
+    // onSelect(value) è responsabilità del chiamante: deve aggiornare lo stato/draft E l'input visibile
+    // (di solito richiamando renderScreenContent(), oppure aggiornando a mano l'input per un refresh
+    // più leggero quando il resto della schermata non dipende dalla scelta).
+    function collegaF4(id, titolo, items, onSelect) {
+        const btn = document.getElementById(id + '-btn');
+        const inp = document.getElementById(id);
+        if (!btn)
+            return;
+        const apri = () => apriF4(titolo, items, onSelect);
+        btn.addEventListener('click', apri);
+        if (inp)
+            inp.addEventListener('click', apri);
+    }
+
     // ============ STAMPA DOCUMENTI (a video / PDF tramite stampa del browser) ============
     function stampaDocumento(corpoHTML) {
         const area = document.getElementById('print-area');
@@ -2802,10 +2933,7 @@
             <div class="formwrap">
               <div class="formgrid">
                 <label>Cliente</label>
-                <select id="f-cliente">
-                  <option value="">-- seleziona --</option>
-                  ${clienti.map(c => `<option value="${c.codice}" ${draftOV.cliente === c.codice ? 'selected' : ''}>${c.codice} - ${c.ragioneSociale}</option>`).join('')}
-                </select>
+                ${campoF4HTML('f-cliente', draftOV.cliente ? clienteLabel(draftOV.cliente) : '', '-- cerca cliente (F4) --')}
                 <label>Riferimento cliente</label><input id="f-rifcliente" value="${draftOV.riferimentoCliente}" placeholder="es. numero ordine d'acquisto del cliente">
               </div>
               ${clienti.length === 0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun cliente in anagrafica: crealo prima in XD01.</p>' : ''}
@@ -2814,10 +2942,7 @@
                 ${draftOV.righe.map((r, i) => `
                   <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;" data-riga="${i}">
                     <span style="font-size:10.5px; color:#5a6470; width:56px;">Pos. ${String((i + 1) * 10).padStart(4, '0')}</span>
-                    <select class="riga-prodotto" data-i="${i}" style="flex:2; font-size:11.5px; padding:3px; border:1px solid #7f9db9;">
-                      <option value="">-- prodotto --</option>
-                      ${prodottiFiniti.map(p => `<option value="${p.codice}" ${r.prodotto === p.codice ? 'selected' : ''}>${p.codice} - ${p.descrizione}</option>`).join('')}
-                    </select>
+                    <div style="flex:2;">${campoF4HTML('f-riga-prodotto-' + i, r.prodotto ? materialeLabel(r.prodotto) : '', '-- cerca prodotto (F4) --')}</div>
                     <input class="riga-qta" data-i="${i}" type="number" min="1" value="${r.quantita}" placeholder="Qtà" style="width:70px; font-size:11.5px; padding:3px; border:1px solid #7f9db9;">
                     <input class="riga-data" data-i="${i}" type="date" value="${r.dataRichiesta}" style="font-size:11.5px; padding:3px; border:1px solid #7f9db9;">
                     ${draftOV.righe.length > 1 ? `<span class="rowaction danger remove-riga" data-i="${i}" style="cursor:pointer;">rimuovi</span>` : ''}
@@ -2833,7 +2958,13 @@
               </table>
             </div>
           `;
-        document.getElementById('f-cliente').addEventListener('change', e => draftOV.cliente = e.target.value);
+        collegaF4('f-cliente', 'Cerca cliente', clienti.map(c => ({
+            value: c.codice,
+            label: clienteLabel(c.codice)
+        })), (valore) => {
+            draftOV.cliente = valore;
+            renderScreenContent();
+        });
         document.getElementById('f-rifcliente').addEventListener('input', e => draftOV.riferimentoCliente = e.target.value);
         document.getElementById('add-riga-ov').addEventListener('click', () => {
             draftOV.righe.push({
@@ -2861,8 +2992,14 @@
                 renderScreenContent();
             });
         });
-        document.querySelectorAll('.riga-prodotto').forEach(sel => {
-            sel.addEventListener('change', e => draftOV.righe[Number(e.target.dataset.i)].prodotto = e.target.value);
+        draftOV.righe.forEach((r, i) => {
+            collegaF4('f-riga-prodotto-' + i, 'Cerca prodotto', prodottiFiniti.map(p => ({
+                value: p.codice,
+                label: materialeLabel(p.codice)
+            })), (valore) => {
+                draftOV.righe[i].prodotto = valore;
+                renderScreenContent();
+            });
         });
         document.querySelectorAll('.riga-qta').forEach(inp => {
             inp.addEventListener('input', e => draftOV.righe[Number(e.target.dataset.i)].quantita = e.target.value);
@@ -3593,10 +3730,7 @@
             <div class="formwrap">
               <div class="formgrid">
                 <label>Prodotto finito</label>
-                <select id="f-prodotto">
-                  <option value="">-- seleziona --</option>
-                  ${prodottiFiniti.map(p => `<option value="${p.codice}" ${draftAssegnazione.prodotto === p.codice ? 'selected' : ''}>${p.codice} - ${p.descrizione}</option>`).join('')}
-                </select>
+                ${campoF4HTML('f-prodotto', draftAssegnazione.prodotto ? materialeLabel(draftAssegnazione.prodotto) : '', '-- cerca prodotto finito (F4) --')}
               </div>
               ${lineeProduzione.length === 0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessuna linea di produzione definita: crearle prima in CR01.</p>' :
         `<div style="margin-top:10px;">
@@ -3629,9 +3763,12 @@
                 renderMain();
             }));
         });
-        document.getElementById('f-prodotto').addEventListener('change', e => {
-            draftAssegnazione.prodotto = e.target.value;
-            draftAssegnazione.linee = assegnazioni.filter(a => a.prodotto === e.target.value).map(a => a.linea);
+        collegaF4('f-prodotto', 'Cerca prodotto finito', prodottiFiniti.map(p => ({
+            value: p.codice,
+            label: materialeLabel(p.codice)
+        })), (valore) => {
+            draftAssegnazione.prodotto = valore;
+            draftAssegnazione.linee = assegnazioni.filter(a => a.prodotto === valore).map(a => a.linea);
             renderScreenContent();
         });
         document.querySelectorAll('.linea-check').forEach(cb => {
@@ -3676,10 +3813,7 @@
             <div class="formwrap">
               <div class="formgrid">
                 <label>Materia prima</label>
-                <select id="f-materiale">
-                  <option value="">-- seleziona --</option>
-                  ${materiePrime.map(m => `<option value="${m.codice}" ${draftAssocMatFor.materiale === m.codice ? 'selected' : ''}>${m.codice} - ${m.descrizione}</option>`).join('')}
-                </select>
+                ${campoF4HTML('f-materiale', draftAssocMatFor.materiale ? materialeLabel(draftAssocMatFor.materiale) : '', '-- cerca materia prima (F4) --')}
               </div>
               ${fornitori.length === 0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun fornitore in anagrafica: crearlo prima in XK01.</p>' :
         `<div style="margin-top:10px;">
@@ -3717,9 +3851,12 @@
                 renderMain();
             }));
         });
-        document.getElementById('f-materiale').addEventListener('change', e => {
-            draftAssocMatFor.materiale = e.target.value;
-            draftAssocMatFor.fornitori = fornitoriMateriale.filter(a => a.materiale === e.target.value).map(a => a.fornitore);
+        collegaF4('f-materiale', 'Cerca materia prima', materiePrime.map(m => ({
+            value: m.codice,
+            label: materialeLabel(m.codice)
+        })), (valore) => {
+            draftAssocMatFor.materiale = valore;
+            draftAssocMatFor.fornitori = fornitoriMateriale.filter(a => a.materiale === valore).map(a => a.fornitore);
             renderScreenContent();
         });
         document.querySelectorAll('.f-fornitore-check').forEach(cb => {
@@ -3948,10 +4085,7 @@
             <div class="formwrap">
               <div class="formgrid">
                 <label>Prodotto finito</label>
-                <select id="f-prodotto">
-                  <option value="">-- seleziona --</option>
-                  ${prodottiFiniti.map(p => `<option value="${p.codice}" ${draftCO01.prodotto === p.codice ? 'selected' : ''}>${p.codice} - ${p.descrizione}</option>`).join('')}
-                </select>
+                ${campoF4HTML('f-prodotto', draftCO01.prodotto ? materialeLabel(draftCO01.prodotto) : '', '-- cerca prodotto finito (F4) --')}
                 <label>Quantità da produrre</label><input id="f-qta" type="number" min="1" value="${draftCO01.quantita}">
                 <label>Data pianificata</label><input id="f-dataPian" type="date" value="${draftCO01.dataPianificata || ''}">
               </div>
@@ -3959,7 +4093,13 @@
               <p style="font-size:10.5px; color:#8a8a80; margin-top:8px;">Creazione manuale, indipendente da MF50/MRP — utile per produzioni non legate a un ordine cliente specifico (es. scorta).</p>
             </div>
           `;
-        document.getElementById('f-prodotto').addEventListener('change', e => draftCO01.prodotto = e.target.value);
+        collegaF4('f-prodotto', 'Cerca prodotto finito', prodottiFiniti.map(p => ({
+            value: p.codice,
+            label: materialeLabel(p.codice)
+        })), (valore) => {
+            draftCO01.prodotto = valore;
+            renderScreenContent();
+        });
         document.getElementById('f-qta').addEventListener('input', e => draftCO01.quantita = e.target.value);
         document.getElementById('f-dataPian').addEventListener('input', e => draftCO01.dataPianificata = e.target.value);
         document.getElementById('save-co01').addEventListener('click', () => withGuard(async () => {
@@ -4144,10 +4284,7 @@
             <div class="formwrap">
               <div class="formgrid">
                 <label>Materia prima</label>
-                <select id="f-materiale">
-                  <option value="">-- seleziona --</option>
-                  ${materiePrime.map(m => `<option value="${m.codice}" ${draftPR.materiale === m.codice ? 'selected' : ''}>${m.codice} - ${m.descrizione}</option>`).join('')}
-                </select>
+                ${campoF4HTML('f-materiale', draftPR.materiale ? materialeLabel(draftPR.materiale) : '', '-- cerca materia prima (F4) --')}
                 <label>Quantità</label><input id="f-qta" type="number" min="1" value="${draftPR.quantita}">
                 <label>Data necessità</label><input id="f-data" type="date" value="${draftPR.dataRichiesta}">
               </div>
@@ -4179,7 +4316,13 @@
                 renderMain();
             }));
         });
-        document.getElementById('f-materiale').addEventListener('change', e => draftPR.materiale = e.target.value);
+        collegaF4('f-materiale', 'Cerca materia prima', materiePrime.map(m => ({
+            value: m.codice,
+            label: materialeLabel(m.codice)
+        })), (valore) => {
+            draftPR.materiale = valore;
+            renderScreenContent();
+        });
         document.getElementById('f-qta').addEventListener('input', e => draftPR.quantita = e.target.value);
         document.getElementById('f-data').addEventListener('input', e => draftPR.dataRichiesta = e.target.value);
         document.getElementById('save-pr').addEventListener('click', () => withGuard(async () => {
@@ -4284,10 +4427,7 @@
             <div class="formwrap">
               <div class="formgrid">
                 <label>Fornitore</label>
-                <select id="f-fornitore">
-                  <option value="">-- seleziona --</option>
-                  ${fornitori.map(f => `<option value="${f.codice}" ${draftPO.fornitore === f.codice ? 'selected' : ''}>${f.codice} - ${f.ragioneSociale}</option>`).join('')}
-                </select>
+                ${campoF4HTML('f-fornitore', draftPO.fornitore ? fornitoreLabel(draftPO.fornitore) : '', '-- cerca fornitore (F4) --')}
               </div>
               ${fornitori.length === 0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun fornitore in anagrafica: crealo prima in XK01.</p>' : ''}
             </div>
@@ -4304,8 +4444,11 @@
               <p style="font-size:10px; color:#8a8a80; padding:6px 8px;">Annullando una riga d'ordine, la richiesta d'acquisto (RA) che l'aveva generata torna disponibile per essere riordinata o eliminata. Una riga già ricevuta (anche solo in parte, da MIGO) non può essere annullata; le altre righe dello stesso ordine restano annullabili singolarmente. Se annulli l'ultima riga attiva, l'intero ordine viene rimosso.</p>
             </div>
           `;
-        document.getElementById('f-fornitore').addEventListener('change', e => {
-            draftPO.fornitore = e.target.value;
+        collegaF4('f-fornitore', 'Cerca fornitore', fornitori.map(f => ({
+            value: f.codice,
+            label: fornitoreLabel(f.codice)
+        })), (valore) => {
+            draftPO.fornitore = valore;
             renderScreenContent();
         });
         document.querySelectorAll('.stampa-oa').forEach(el => {
@@ -5112,20 +5255,11 @@
             <div class="formwrap">
               <div class="formgrid">
                 <label>Materiale</label>
-                <select id="f-materiale">
-                  <option value="">-- seleziona --</option>
-                  ${materiali.map(m => `<option value="${m.codice}" ${draftMov.materiale === m.codice ? 'selected' : ''}>${m.codice} - ${m.descrizione}</option>`).join('')}
-                </select>
+                ${campoF4HTML('f-materiale', draftMov.materiale ? materialeLabel(draftMov.materiale) : '', '-- cerca materiale (F4) --')}
                 <label>Ubicazione di partenza</label>
-                <select id="f-locda">
-                  <option value="">-- seleziona --</option>
-                  ${locazioni.map(l => `<option value="${l.codice}" ${draftMov.locazioneDa === l.codice ? 'selected' : ''}>${l.codice} - ${l.descrizione} (disp. ${draftMov.materiale ? getGiacenzaLoc(draftMov.materiale, l.codice) : '-'})</option>`).join('')}
-                </select>
+                ${campoF4HTML('f-locda', draftMov.locazioneDa ? `${draftMov.locazioneDa} - ${(locazioni.find(l => l.codice === draftMov.locazioneDa) || {}).descrizione || ''} (disp. ${draftMov.materiale ? getGiacenzaLoc(draftMov.materiale, draftMov.locazioneDa) : '-'})` : '', '-- cerca ubicazione (F4) --')}
                 <label>Ubicazione di arrivo</label>
-                <select id="f-loca">
-                  <option value="">-- seleziona --</option>
-                  ${locazioni.map(l => `<option value="${l.codice}" ${draftMov.locazioneA === l.codice ? 'selected' : ''}>${l.codice} - ${l.descrizione}</option>`).join('')}
-                </select>
+                ${campoF4HTML('f-loca', draftMov.locazioneA ? `${draftMov.locazioneA} - ${(locazioni.find(l => l.codice === draftMov.locazioneA) || {}).descrizione || ''}` : '', '-- cerca ubicazione (F4) --')}
                 <label>Quantità</label><input id="f-qta" type="number" min="1" value="${draftMov.quantita}">
                 <label>Causale</label>
                 <select id="f-causale">
@@ -5135,15 +5269,27 @@
               ${draftMov.materiale && draftMov.locazioneDa ? `<p style="font-size:11px; margin-top:8px;">Disponibile in ${draftMov.locazioneDa}: <strong>${getGiacenzaLoc(draftMov.materiale, draftMov.locazioneDa)}</strong>${Number(draftMov.quantita) > getGiacenzaLoc(draftMov.materiale, draftMov.locazioneDa) ? ` <span style="color:#a83232;">⚠ quantità superiore al disponibile: la giacenza risulterà negativa (comunque consentito, per scopi didattici)</span>` : ''}</p>` : ''}
             </div>
           `;
-        document.getElementById('f-materiale').addEventListener('change', e => {
-            draftMov.materiale = e.target.value;
+        collegaF4('f-materiale', 'Cerca materiale', materiali.map(m => ({
+            value: m.codice,
+            label: materialeLabel(m.codice)
+        })), (valore) => {
+            draftMov.materiale = valore;
             renderScreenContent();
         });
-        document.getElementById('f-locda').addEventListener('change', e => {
-            draftMov.locazioneDa = e.target.value;
+        collegaF4('f-locda', 'Cerca ubicazione di partenza', locazioni.map(l => ({
+            value: l.codice,
+            label: `${l.codice} - ${l.descrizione} (disp. ${draftMov.materiale ? getGiacenzaLoc(draftMov.materiale, l.codice) : '-'})`
+        })), (valore) => {
+            draftMov.locazioneDa = valore;
             renderScreenContent();
         });
-        document.getElementById('f-loca').addEventListener('change', e => draftMov.locazioneA = e.target.value);
+        collegaF4('f-loca', 'Cerca ubicazione di arrivo', locazioni.map(l => ({
+            value: l.codice,
+            label: `${l.codice} - ${l.descrizione}`
+        })), (valore) => {
+            draftMov.locazioneA = valore;
+            renderScreenContent();
+        });
         document.getElementById('f-qta').addEventListener('input', e => draftMov.quantita = e.target.value);
         document.getElementById('f-causale').addEventListener('change', e => draftMov.causale = e.target.value);
         document.getElementById('save-mov').addEventListener('click', () => withGuard(async () => {
@@ -5465,10 +5611,7 @@
             <div class="formwrap">
               <div class="formgrid">
                 <label>Ordine di vendita</label>
-                <select id="f-ordine">
-                  <option value="">-- seleziona --</option>
-                  ${aperti.map(o => `<option value="${o.numero}" ${draftVL.ordineVendita === o.numero ? 'selected' : ''}>${o.numero} — cliente ${o.cliente}</option>`).join('')}
-                </select>
+                ${campoF4HTML('f-ordine', draftVL.ordineVendita ? `${draftVL.ordineVendita} — cliente ${(aperti.find(o => o.numero === draftVL.ordineVendita) || {}).cliente || ''}` : '', '-- cerca ordine di vendita (F4) --')}
               </div>
               ${aperti.length === 0 ? '<p style="font-size:11px;color:#9a9a8f;margin-top:8px;">Nessun ordine di vendita con righe ancora da consegnare.</p>' : ''}
               ${ordineSel ? `
@@ -5501,8 +5644,11 @@
                 renderScreenContent();
             });
         });
-        document.getElementById('f-ordine').addEventListener('change', e => {
-            draftVL.ordineVendita = e.target.value;
+        collegaF4('f-ordine', 'Cerca ordine di vendita', aperti.map(o => ({
+            value: o.numero,
+            label: `${o.numero} — cliente ${o.cliente}`
+        })), (valore) => {
+            draftVL.ordineVendita = valore;
             draftVL.righe = {};
             renderScreenContent();
         });
@@ -5679,31 +5825,54 @@
         });
     }
 
+    // Scheda attiva di MM01 (stile SAP reale: dati anagrafici di base separati dai dati di
+    // magazzino/pianificazione, invece di un unico form lunghissimo). Persiste tra un render e l'altro
+    // finché non si cambia materiale/schermata, così passare da una scheda all'altra non perde nulla
+    // di ciò che si è già scritto nell'altra.
+    let mm01TabAttivo = 'base';
     function renderMM01(el) {
+        const tabs = [
+        {
+            key: 'base',
+            label: '① Dati base'
+        },
+        {
+            key: 'mrp',
+            label: '② Magazzino / MRP'
+        },
+        ];
         el.innerHTML = `
             <div class="actionrow"><button class="actionbtn" id="save-mm01">✔ Salva materiale</button></div>
+            <div class="formwrap" style="padding-bottom:0;">
+              ${renderSapTabsHTML(tabs, mm01TabAttivo)}
+            </div>
             <div class="formwrap">
-              <div class="formgrid">
-                <label>Codice materiale</label><input id="f-codice" value="${draftMateriale.codice}" placeholder="es. RM-1000 o FIN-2000">
-                <label>Descrizione</label><input id="f-desc" value="${draftMateriale.descrizione}" placeholder="es. Lamiera acciaio 2mm">
-                <label>Tipo</label>
-                <select id="f-tipo">
-                  <option value="MP" ${draftMateriale.tipo === 'MP' ? 'selected' : ''}>Materia Prima</option>
-                  <option value="PF" ${draftMateriale.tipo === 'PF' ? 'selected' : ''}>Prodotto Finito</option>
-                </select>
-                <label>Unità di misura</label>
-                <select id="f-um">
-                  <option value="PZ" ${draftMateriale.um === 'PZ' ? 'selected' : ''}>PZ</option>
-                  <option value="KG" ${draftMateriale.um === 'KG' ? 'selected' : ''}>KG</option>
-                  <option value="MT" ${draftMateriale.um === 'MT' ? 'selected' : ''}>MT</option>
-                  <option value="LT" ${draftMateriale.um === 'LT' ? 'selected' : ''}>LT</option>
-                </select>
-                <label>Giacenza iniziale (in RICEZIONE)</label><input id="f-giac" type="number" min="0" value="${draftMateriale.giacenza}">
-                <label>Scorta minima</label><input id="f-scortamin" type="number" min="0" value="${draftMateriale.scortaMinima}">
-                <label>Scorta di sicurezza</label><input id="f-scortasic" type="number" min="0" value="${draftMateriale.scortaSicurezza}">
-                <label>Punto di riordino</label><input id="f-puntoriord" type="number" min="0" value="${draftMateriale.puntoRiordino}">
-              </div>
-              <p style="font-size:10.5px; color:#8a8a80; margin-top:8px;">Questi tre valori sono facoltativi (default 0) e servono da riferimento visivo in MMBE/MD01: non bloccano nessuna operazione, segnalano solo quando la giacenza scende sotto soglia.</p>
+              ${mm01TabAttivo === 'base' ? `
+                <div class="formgrid">
+                  <label>Codice materiale</label><input id="f-codice" value="${draftMateriale.codice}" placeholder="es. RM-1000 o FIN-2000">
+                  <label>Descrizione</label><input id="f-desc" value="${draftMateriale.descrizione}" placeholder="es. Lamiera acciaio 2mm">
+                  <label>Tipo</label>
+                  <select id="f-tipo">
+                    <option value="MP" ${draftMateriale.tipo === 'MP' ? 'selected' : ''}>Materia Prima</option>
+                    <option value="PF" ${draftMateriale.tipo === 'PF' ? 'selected' : ''}>Prodotto Finito</option>
+                  </select>
+                  <label>Unità di misura</label>
+                  <select id="f-um">
+                    <option value="PZ" ${draftMateriale.um === 'PZ' ? 'selected' : ''}>PZ</option>
+                    <option value="KG" ${draftMateriale.um === 'KG' ? 'selected' : ''}>KG</option>
+                    <option value="MT" ${draftMateriale.um === 'MT' ? 'selected' : ''}>MT</option>
+                    <option value="LT" ${draftMateriale.um === 'LT' ? 'selected' : ''}>LT</option>
+                  </select>
+                </div>
+              ` : `
+                <div class="formgrid">
+                  <label>Giacenza iniziale (in RICEZIONE)</label><input id="f-giac" type="number" min="0" value="${draftMateriale.giacenza}">
+                  <label>Scorta minima</label><input id="f-scortamin" type="number" min="0" value="${draftMateriale.scortaMinima}">
+                  <label>Scorta di sicurezza</label><input id="f-scortasic" type="number" min="0" value="${draftMateriale.scortaSicurezza}">
+                  <label>Punto di riordino</label><input id="f-puntoriord" type="number" min="0" value="${draftMateriale.puntoRiordino}">
+                </div>
+                <p style="font-size:10.5px; color:#8a8a80; margin-top:8px;">Questi tre valori sono facoltativi (default 0) e servono da riferimento visivo in MMBE/MD01: non bloccano nessuna operazione, segnalano solo quando la giacenza scende sotto soglia.</p>
+              `}
             </div>
             <div class="tablewrap">
               <table>
@@ -5712,8 +5881,15 @@
               </table>
             </div>
           `;
+        attachSapTabsListeners(tab => {
+            mm01TabAttivo = tab;
+            renderScreenContent();
+        });
         ['f-codice', 'f-desc', 'f-tipo', 'f-um', 'f-giac', 'f-scortamin', 'f-scortasic', 'f-puntoriord'].forEach(id => {
-            document.getElementById(id).addEventListener('input', (e) => {
+            const campo = document.getElementById(id);
+            if (!campo)
+                return; // solo i campi della scheda attiva sono nel DOM
+            campo.addEventListener('input', (e) => {
                 const map = {
                     'f-codice': 'codice',
                     'f-desc': 'descrizione',
@@ -5773,6 +5949,7 @@
                 scortaSicurezza: "0",
                 puntoRiordino: "0"
             };
+            mm01TabAttivo = 'base';
             setStatus(`Materiale ${rec.codice} creato con successo.${giacenzaIniziale > 0 ? ' Giacenza iniziale caricata in RICEZIONE.' : ''}`);
             renderMain();
         }));
@@ -5789,10 +5966,7 @@
             <div class="formwrap">
               <div class="formgrid">
                 <label>Materiale</label>
-                <select id="f-materiale-mm02">
-                  <option value="">-- seleziona --</option>
-                  ${materiali.map(m => `<option value="${m.codice}" ${draftMM02.codiceSelezionato === m.codice ? 'selected' : ''}>${m.codice} - ${m.descrizione}</option>`).join('')}
-                </select>
+                ${campoF4HTML('f-materiale-mm02', mat ? materialeLabel(mat.codice) : '', '-- cerca materiale (F4) --')}
               </div>
               ${mat ? `
                 <div class="formgrid" style="margin-top:10px;">
@@ -5804,10 +5978,13 @@
               ` : ''}
             </div>
           `;
-        document.getElementById('f-materiale-mm02').addEventListener('change', (e) => {
-            const m = materiali.find(x => x.codice === e.target.value);
+        collegaF4('f-materiale-mm02', 'Cerca materiale', materiali.map(m => ({
+            value: m.codice,
+            label: materialeLabel(m.codice)
+        })), (valore) => {
+            const m = materiali.find(x => x.codice === valore);
             draftMM02 = {
-                codiceSelezionato: e.target.value,
+                codiceSelezionato: valore,
                 scortaMinima: String(m ? (m.scortaMinima || 0) : 0),
                 scortaSicurezza: String(m ? (m.scortaSicurezza || 0) : 0),
                 puntoRiordino: String(m ? (m.puntoRiordino || 0) : 0),
@@ -6022,10 +6199,7 @@
             <div class="formwrap">
               <div class="formgrid">
                 <label>Prodotto finito</label>
-                <select id="f-prodotto">
-                  <option value="">-- seleziona --</option>
-                  ${prodottiFiniti.map(p => `<option value="${p.codice}" ${draftDistinta.prodotto === p.codice ? 'selected' : ''}>${p.codice} - ${p.descrizione}</option>`).join('')}
-                </select>
+                ${campoF4HTML('f-prodotto', draftDistinta.prodotto ? materialeLabel(draftDistinta.prodotto) : '', '-- cerca prodotto finito (F4) --')}
               </div>
               ${prodottiFiniti.length === 0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun prodotto finito in anagrafica. Crea prima un materiale di tipo "Prodotto Finito" in MM01.</p>' : ''}
               <div id="comp-rows" style="margin-top:10px;">
@@ -6033,10 +6207,7 @@
                   <div class="formgrid" style="margin-bottom:4px;" data-comprow="${i}">
                     <label>Componente ${i + 1}</label>
                     <div style="display:flex; gap:6px;">
-                      <select class="comp-codice" data-i="${i}" style="flex:2; font-size:11.5px; padding:3px; border:1px solid #7f9db9;">
-                        <option value="">-- seleziona materia prima --</option>
-                        ${materiePrime.map(m => `<option value="${m.codice}" ${c.codice === m.codice ? 'selected' : ''}>${m.codice} - ${m.descrizione}</option>`).join('')}
-                      </select>
+                      <div style="flex:2;">${campoF4HTML('f-comp-codice-' + i, c.codice ? materialeLabel(c.codice) : '', '-- cerca materia prima (F4) --')}</div>
                       <input class="comp-qta" data-i="${i}" type="number" min="0" step="0.01" value="${c.qta}" style="width:80px; font-size:11.5px; padding:3px; border:1px solid #7f9db9;" placeholder="Qtà">
                     </div>
                   </div>
@@ -6063,8 +6234,12 @@
                 renderMain();
             }));
         });
-        document.getElementById('f-prodotto').addEventListener('change', (e) => {
-            draftDistinta.prodotto = e.target.value;
+        collegaF4('f-prodotto', 'Cerca prodotto finito', prodottiFiniti.map(p => ({
+            value: p.codice,
+            label: materialeLabel(p.codice)
+        })), (valore) => {
+            draftDistinta.prodotto = valore;
+            renderScreenContent();
         });
         document.getElementById('add-comp').addEventListener('click', () => {
             draftDistinta.componenti.push({
@@ -6073,9 +6248,13 @@
             });
             renderScreenContent();
         });
-        document.querySelectorAll('.comp-codice').forEach(sel => {
-            sel.addEventListener('change', (e) => {
-                draftDistinta.componenti[Number(e.target.dataset.i)].codice = e.target.value;
+        draftDistinta.componenti.forEach((c, i) => {
+            collegaF4('f-comp-codice-' + i, 'Cerca materia prima', materiePrime.map(m => ({
+                value: m.codice,
+                label: materialeLabel(m.codice)
+            })), (valore) => {
+                draftDistinta.componenti[i].codice = valore;
+                renderScreenContent();
             });
         });
         document.querySelectorAll('.comp-qta').forEach(inp => {
@@ -6187,79 +6366,23 @@
         renderMain();
     }
 
-    // ============ CANCELLO D'ACCESSO AL SITO ============
-    // Password unica condivisa con i corsisti: il sito non mostra nulla finché non viene
-    // inserita correttamente. Cambiala qui per cambiare la password d'accesso.
-    const SITE_ACCESS_PASSWORD = 'grs2026';
-
-    function accessoSitoGiaConsentito() {
-        try {
-            return sessionStorage.getItem('grsAccessoSito') === '1' || localStorage.getItem('grsAccessoSito') === '1';
-        }
-        catch (e) {
-            return false;
-        }
-    }
-    function renderAccessGate(onOk) {
-        document.getElementById('app').innerHTML = `
-            <div class="login-overlay"><div class="login-box">
-              <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
-                <div class="logo" style="width:28px; height:28px; font-size:15px;">S</div>
-                <h2 style="margin:0;">GRS Solutions ERP Full</h2>
-              </div>
-              <p>Accesso riservato ai corsisti. Inserisci la password fornita dal formatore.</p>
-              <input type="password" id="access-pw-input" placeholder="Password" autocomplete="off" style="width:100%; padding:8px; font-size:12px; border:1px solid #7f9db9; margin-bottom:10px; font-family:inherit; box-sizing:border-box;">
-              <button id="access-pw-btn">Entra</button>
-              <div id="access-pw-err" style="color:#a83232; font-size:11px; margin-top:8px; display:none;">Password errata, riprova.</div>
-            </div></div>
-          `;
-        const input = document.getElementById('access-pw-input');
-        const err = document.getElementById('access-pw-err');
-        const tentaAccesso = () => {
-            if (input.value === SITE_ACCESS_PASSWORD) {
-                try {
-                    localStorage.setItem('grsAccessoSito', '1');
-                } catch (e) {}
-                onOk();
-            } else {
-                err.style.display = 'block';
-                input.style.borderColor = '#a83232';
-                input.value = '';
-                input.focus();
-            }
-        };
-        document.getElementById('access-pw-btn').addEventListener('click', tentaAccesso);
-        input.addEventListener('keydown', e => {
-            if (e.key === 'Enter')
-                tentaAccesso();
-        });
-        input.focus();
-    }
-
     (async () => {
-        const avviaApp = async () => {
-            if (!STORAGE_CONFIGURATO) {
-                console.warn('FIREBASE_URL non configurato: i dati non saranno condivisi finché non viene impostato correttamente nel codice.');
-            }
-            const ban = await dispositivoBannato();
-            if (ban) {
-                renderDispositivoBannato(ban);
-                return;
-            }
-            await migraDatiLegacySeNecessario();
-            const sessione = await _leggiSessioneDispositivo();
-            if (sessione && sessione.corso && sessione.utente) {
-                currentCorso = sessione.corso;
-                currentUser = sessione.utente;
-                boot();
-            } else {
-                renderCorsoSelect();
-            }
-        };
-        if (accessoSitoGiaConsentito()) {
-            avviaApp();
+        if (!STORAGE_CONFIGURATO) {
+            console.warn('FIREBASE_URL non configurato: i dati non saranno condivisi finché non viene impostato correttamente nel codice.');
+        }
+        const ban = await dispositivoBannato();
+        if (ban) {
+            renderDispositivoBannato(ban);
+            return;
+        }
+        await migraDatiLegacySeNecessario();
+        const sessione = await _leggiSessioneDispositivo();
+        if (sessione && sessione.corso && sessione.utente) {
+            currentCorso = sessione.corso;
+            currentUser = sessione.utente;
+            boot();
         } else {
-            renderAccessGate(avviaApp);
+            renderCorsoSelect();
         }
     })();
     </script>
