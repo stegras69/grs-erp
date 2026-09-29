@@ -1027,7 +1027,12 @@
         });
         return tot;
     }
-    async function registraMovimento({materiale, locazioneDa, locazioneA, quantita, causale}) {
+    // `extra` porta campi opzionali che rendono il movimento AUTOSUFFICIENTE per una stampa futura
+    // (numeroOrdineRif, fornitore, ddtFornitore, ricevutoDa, ecc.), così la stampa del verbale di
+    // ricevimento (vedi stampaMovimentoRicevimento) non dipende più dal fatto che l'ordine d'acquisto
+    // originale esista ancora invariato: il movimento, una volta registrato, non viene mai toccato o
+    // cancellato da nessuna altra funzione (annullo ordine, pulizia massiva, ecc.).
+    async function registraMovimento({materiale, locazioneDa, locazioneA, quantita, causale, extra}) {
         const rec = {
             numero: 'MOV-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase(),
             materiale,
@@ -1038,6 +1043,7 @@
             data: nowStr(),
             creatoDa: currentUser,
             creatoIl: nowStr(),
+            ...(extra || {}),
         };
         await aggiungiRecord('movimentazioni', rec);
         movimentazioni.push(rec);
@@ -2736,36 +2742,51 @@
           `);
     }
 
-    function stampaRicevimentoPerMateriale(numeroOrdine, materiale) {
-        const duplicati = ordiniAcquisto.filter(x => x.numero === numeroOrdine);
-        const o = duplicati[0];
-        if (!o) {
-            setStatus(`Impossibile stampare: ordine ${numeroOrdine} non trovato.`, true);
+    // Stampa del verbale di ricevimento a partire dal MOVIMENTO stesso (movimentazioni), non
+    // dall'ordine d'acquisto: l'ordine può essere modificato o cancellato in seguito (annullo riga,
+    // pulizia massiva, ecc.), ma il movimento resta per sempre nello storico — quindi la stampa non
+    // deve MAI dipendere dal fatto che l'ordine esista ancora, altrimenti il link resta visibile in
+    // MB51 ma il click non produce nulla (silenziosamente). Per i movimenti registrati da qui in poi,
+    // tutti i dati necessari sono già salvati sul movimento stesso (vedi extra passato a
+    // registraMovimento in MIGO). Per movimenti storici (creati prima di questi campi), si tenta un
+    // recupero "best effort" dalla causale e, se l'ordine esiste ancora, da lì — ma anche se questo
+    // fallisce, si stampa comunque con quello che il movimento sa di per sé (materiale, quantità,
+    // causale, data, chi l'ha fatto): non si torna mai a mani vuote finché il movimento esiste.
+    function stampaMovimentoRicevimento(movimentoNumero) {
+        const m = movimentazioni.find(x => x.numero === movimentoNumero);
+        if (!m) {
+            setStatus('Impossibile stampare: il movimento non è più nello storico (dato inatteso).', true);
             return;
         }
-        const idx = o.righe.findIndex(r => r.materiale === materiale && rigaHaRicezioni(r));
-        if (idx === -1) {
-            const suggerimento = duplicati.length > 1 ? ` Attenzione: esistono più ordini con numero ${numeroOrdine} (dato storico duplicato) — potrebbe essere questo il motivo.` : '';
-            setStatus(`Impossibile stampare: nessuna riga ricevuta per ${materialeLabel(materiale)} trovata nell'ordine ${numeroOrdine}.${suggerimento}`, true);
-            return;
+        let numeroOrdineRif = m.numeroOrdineRif || null;
+        let fornitoreCod = m.fornitore || null;
+        let ddt = m.ddtFornitore || null;
+        let ricevutoDa = m.ricevutoDa || m.creatoDa;
+        if (!numeroOrdineRif) {
+            const match = (m.causale || '').match(/\(([A-Za-z0-9\-]+)/);
+            if (match) {
+                numeroOrdineRif = match[1];
+                const o = ordiniAcquisto.find(x => x.numero === numeroOrdineRif);
+                if (o) {
+                    fornitoreCod = fornitoreCod || o.fornitore;
+                    const riga = o.righe.find(r => r.materiale === m.materiale);
+                    if (riga) {
+                        ddt = ddt || riga.ddtFornitore;
+                        ricevutoDa = ricevutoDa || riga.ricevutoDa;
+                    }
+                }
+            }
         }
-        stampaRicevimento(numeroOrdine, idx);
-    }
-    function stampaRicevimento(numeroOrdine, indice) {
-        const o = ordiniAcquisto.find(x => x.numero === numeroOrdine);
-        if (!o)
-            return;
-        const r = o.righe[indice];
-        const forn = fornitori.find(f => f.codice === o.fornitore);
+        const forn = fornitoreCod ? fornitori.find(f => f.codice === fornitoreCod) : null;
         stampaDocumento(`
             <h2 style="margin:0 0 4px 0;">Verbale di Ricevimento Merce</h2>
-            <p style="margin:0 0 14px 0; color:#666; font-size:12px;">Rif. ordine d'acquisto ${o.numero}</p>
-            <p style="margin:2px 0;"><strong>Fornitore:</strong> ${forn ? forn.codice + ' - ' + forn.ragioneSociale : o.fornitore}</p>
-            <p style="margin:2px 0;"><strong>Materiale:</strong> ${materialeLabel(r.materiale)}</p>
-            <p style="margin:2px 0;"><strong>Quantità ricevuta:</strong> ${r.quantita}</p>
-            <p style="margin:10px 0 2px 0;"><strong>N. DDT fornitore:</strong> ${r.ddtFornitore || '-'}</p>
-            <p style="margin:2px 0;"><strong>Data ricevimento:</strong> ${r.dataRicevimento || '-'}</p>
-            <p style="margin:2px 0;"><strong>Ricevuto da:</strong> ${r.ricevutoDa || '-'}</p>
+            <p style="margin:0 0 14px 0; color:#666; font-size:12px;">Rif. ordine d'acquisto ${numeroOrdineRif || '-'} — movimento ${m.numero}</p>
+            <p style="margin:2px 0;"><strong>Fornitore:</strong> ${forn ? forn.codice + ' - ' + forn.ragioneSociale : (fornitoreCod || '-')}</p>
+            <p style="margin:2px 0;"><strong>Materiale:</strong> ${materialeLabel(m.materiale)}</p>
+            <p style="margin:2px 0;"><strong>Quantità ricevuta (questo movimento):</strong> ${m.quantita}</p>
+            <p style="margin:10px 0 2px 0;"><strong>N. DDT fornitore:</strong> ${ddt || '-'}</p>
+            <p style="margin:2px 0;"><strong>Data ricevimento:</strong> ${m.creatoIl || m.data || '-'}</p>
+            <p style="margin:2px 0;"><strong>Ricevuto da:</strong> ${ricevutoDa || '-'}</p>
           `);
     }
 
@@ -4438,6 +4459,9 @@
         asc: true
     };
     let draftQtaMIGO = {}; // { "ordine::indice": quantità inserita per il ricevimento parziale }
+    // Ultimo ricevimento confermato in QUESTA sessione MIGO: permette di stampare subito il documento
+    // di ingresso senza dover andare fino a MB51 a cercare la riga giusta.
+    let ultimoRicevimentoMIGO = null; // { movimento, testo } oppure null
     function renderMIGO(el) {
         const righeAperte = [];
         ordiniAcquisto.forEach(o => {
@@ -4500,6 +4524,11 @@
         el.innerHTML = `
             <div class="formwrap" style="padding-bottom:0;">
               <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Righe d'ordine d'acquisto ancora da ricevere, anche solo in parte. Puoi ricevere meno della quantità residua: la riga resta aperta per il resto. Inserisci il numero del DDT del fornitore prima di confermare, per tracciabilità: la giacenza viene aggiornata al conferma. Clicca su un'intestazione di colonna per ordinare. Lo storico dei ricevimenti già fatti si consulta in MB51.</p>
+              ${ultimoRicevimentoMIGO ? `
+                <div style="background:#eaf3ea; border:1px solid #b8d8b8; padding:6px 8px; margin:0 0 10px 0; font-size:11px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+                  <span>✔ ${ultimoRicevimentoMIGO.testo}</span>
+                  <span class="print-btn stampa-ultimo-migo" style="white-space:nowrap;">🖶 Stampa documento di ingresso</span>
+                </div>` : ''}
             </div>
             <div class="tablewrap" style="margin-top:0;">
               <table>
@@ -4572,12 +4601,18 @@
                 riga.dataRicevimento = dataRicevimento;
                 riga.ricevutoDa = currentUser;
                 const causaleParziale = !completo ? `Ricevimento MIGO parziale (${numeroOrdine}, DDT ${ddt})` : 'Ricevimento MIGO (' + numeroOrdine + ', DDT ' + ddt + ')';
-                await registraMovimento({
+                const movimento = await registraMovimento({
                     materiale: riga.materiale,
                     locazioneDa: null,
                     locazioneA: 'RICEZIONE',
                     quantita: qtaInserita,
-                    causale: causaleParziale
+                    causale: causaleParziale,
+                    extra: {
+                        numeroOrdineRif: numeroOrdine,
+                        fornitore: ordine.fornitore,
+                        ddtFornitore: ddt,
+                        ricevutoDa: currentUser,
+                    }
                 });
                 await applicaPatch('ordiniAcquisto', numeroOrdine, {
                     quantitaRicevuta: nuovaQtaRicevuta,
@@ -4597,10 +4632,20 @@
                 }
                 delete draftDDT[key];
                 delete draftQtaMIGO[key];
+                ultimoRicevimentoMIGO = {
+                    movimento: movimento.numero,
+                    testo: `Ricevimento registrato: ${materialeLabel(riga.materiale)} x ${qtaInserita} da ${numeroOrdine} (DDT ${ddt}).`
+                };
                 setStatus(`Ricevimento registrato: ${riga.materiale} x ${qtaInserita} da ${numeroOrdine} (DDT ${ddt}) in RICEZIONE.${completo ? '' : ` Ancora da ricevere: ${Number(riga.quantita) - nuovaQtaRicevuta}.`} Sposta il materiale prima di poterlo usare in produzione.`);
                 renderMain();
             }));
         });
+        const btnStampaUltimo = document.querySelector('.stampa-ultimo-migo');
+        if (btnStampaUltimo)
+            btnStampaUltimo.addEventListener('click', () => {
+                if (ultimoRicevimentoMIGO)
+                    stampaMovimentoRicevimento(ultimoRicevimentoMIGO.movimento);
+            });
     }
 
     // ============ MMBE (vista giacenze) ============
@@ -5145,6 +5190,14 @@
         return 'Interna';
     }
     function contropartemovimento(m) {
+        // Preferisci il fornitore/cliente salvato DIRETTAMENTE sul movimento (campo "fornitore" aggiunto
+        // in extra da registraMovimento): resta corretto anche se l'ordine originale viene poi modificato
+        // o cancellato. Solo per i movimenti storici senza questo campo si ripiega sulla vecchia ricerca
+        // per numero-ordine dentro la causale (che invece SPARISCE se l'ordine non c'è più).
+        if (m.fornitore)
+            return fornitoreLabel(m.fornitore);
+        if (m.cliente)
+            return clienteLabel(m.cliente);
         const match = (m.causale || '').match(/\(([A-Za-z0-9\-]+)/);
         if (!match)
             return null;
@@ -5277,13 +5330,13 @@
             <div class="tablewrap">
               <table>
                 <thead><tr>${colonne.map(c => `<th class="mov-sort-th" data-campo="${c.campo}" style="cursor:pointer; user-select:none;" title="Clicca per ordinare">${c.label}${sortMov.campo === c.campo ? (sortMov.asc ? ' ▲' : ' ▼') : ''}</th>`).join('')}<th>Stampa</th></tr></thead>
-                <tbody>${elenco.length === 0 ? `<tr><td colspan="${colonne.length + 1}" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna movimentazione.</td></tr>` : elenco.map(m => {const matchRic = (m.causale || '').match(/^Ricevimento MIGO(?: parziale)? \(([^,]+)/);const stampaCell = matchRic ? `<span class="print-btn stampa-ric-mb51" data-ordine="${matchRic[1]}" data-materiale="${m.materiale}">🖶 stampa</span>` : '';return `<tr><td>${m.numero}</td><td>${materialeLabel(m.materiale)}</td><td>${m.tipo}</td><td>${m.locazioneDa || '-'}</td><td>${m.locazioneA || '-'}</td><td>${m.quantita}</td><td>${m.controparte || '-'}</td><td>${m.causale}</td><td>${m.creatoIl}</td><td>${m.creatoDa}</td><td>${stampaCell}</td></tr>`;}).join('')}
+                <tbody>${elenco.length === 0 ? `<tr><td colspan="${colonne.length + 1}" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna movimentazione.</td></tr>` : elenco.map(m => {// Basta che la causale INIZI con "Ricevimento MIGO" per mostrare il link: non serve più// che rispetti l'esatto formato "(numero, DDT ...)" a fine stringa — così un formato// leggermente diverso (dati storici, o modifiche future alla causale) non fa più// sparire il pulsante di stampa.const stampaCell = /^Ricevimento MIGO/.test(m.causale || '') ? `<span class="print-btn stampa-ric-mb51" data-movimento="${m.numero}">🖶 stampa</span>` : '';return `<tr><td>${m.numero}</td><td>${materialeLabel(m.materiale)}</td><td>${m.tipo}</td><td>${m.locazioneDa || '-'}</td><td>${m.locazioneA || '-'}</td><td>${m.quantita}</td><td>${m.controparte || '-'}</td><td>${m.causale}</td><td>${m.creatoIl}</td><td>${m.creatoDa}</td><td>${stampaCell}</td></tr>`;}).join('')}
                 </tbody>
               </table>
             </div>
           `;
         document.querySelectorAll('.stampa-ric-mb51').forEach(elx => {
-            elx.addEventListener('click', () => stampaRicevimentoPerMateriale(elx.dataset.ordine, elx.dataset.materiale));
+            elx.addEventListener('click', () => stampaMovimentoRicevimento(elx.dataset.movimento));
         });
         document.querySelectorAll('.mov-sort-th').forEach(th => {
             th.addEventListener('click', () => {
@@ -6134,23 +6187,79 @@
         renderMain();
     }
 
+    // ============ CANCELLO D'ACCESSO AL SITO ============
+    // Password unica condivisa con i corsisti: il sito non mostra nulla finché non viene
+    // inserita correttamente. Cambiala qui per cambiare la password d'accesso.
+    const SITE_ACCESS_PASSWORD = 'grs2026';
+
+    function accessoSitoGiaConsentito() {
+        try {
+            return sessionStorage.getItem('grsAccessoSito') === '1' || localStorage.getItem('grsAccessoSito') === '1';
+        }
+        catch (e) {
+            return false;
+        }
+    }
+    function renderAccessGate(onOk) {
+        document.getElementById('app').innerHTML = `
+            <div class="login-overlay"><div class="login-box">
+              <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+                <div class="logo" style="width:28px; height:28px; font-size:15px;">S</div>
+                <h2 style="margin:0;">GRS Solutions ERP Full</h2>
+              </div>
+              <p>Accesso riservato ai corsisti. Inserisci la password fornita dal formatore.</p>
+              <input type="password" id="access-pw-input" placeholder="Password" autocomplete="off" style="width:100%; padding:8px; font-size:12px; border:1px solid #7f9db9; margin-bottom:10px; font-family:inherit; box-sizing:border-box;">
+              <button id="access-pw-btn">Entra</button>
+              <div id="access-pw-err" style="color:#a83232; font-size:11px; margin-top:8px; display:none;">Password errata, riprova.</div>
+            </div></div>
+          `;
+        const input = document.getElementById('access-pw-input');
+        const err = document.getElementById('access-pw-err');
+        const tentaAccesso = () => {
+            if (input.value === SITE_ACCESS_PASSWORD) {
+                try {
+                    localStorage.setItem('grsAccessoSito', '1');
+                } catch (e) {}
+                onOk();
+            } else {
+                err.style.display = 'block';
+                input.style.borderColor = '#a83232';
+                input.value = '';
+                input.focus();
+            }
+        };
+        document.getElementById('access-pw-btn').addEventListener('click', tentaAccesso);
+        input.addEventListener('keydown', e => {
+            if (e.key === 'Enter')
+                tentaAccesso();
+        });
+        input.focus();
+    }
+
     (async () => {
-        if (!STORAGE_CONFIGURATO) {
-            console.warn('FIREBASE_URL non configurato: i dati non saranno condivisi finché non viene impostato correttamente nel codice.');
-        }
-        const ban = await dispositivoBannato();
-        if (ban) {
-            renderDispositivoBannato(ban);
-            return;
-        }
-        await migraDatiLegacySeNecessario();
-        const sessione = await _leggiSessioneDispositivo();
-        if (sessione && sessione.corso && sessione.utente) {
-            currentCorso = sessione.corso;
-            currentUser = sessione.utente;
-            boot();
+        const avviaApp = async () => {
+            if (!STORAGE_CONFIGURATO) {
+                console.warn('FIREBASE_URL non configurato: i dati non saranno condivisi finché non viene impostato correttamente nel codice.');
+            }
+            const ban = await dispositivoBannato();
+            if (ban) {
+                renderDispositivoBannato(ban);
+                return;
+            }
+            await migraDatiLegacySeNecessario();
+            const sessione = await _leggiSessioneDispositivo();
+            if (sessione && sessione.corso && sessione.utente) {
+                currentCorso = sessione.corso;
+                currentUser = sessione.utente;
+                boot();
+            } else {
+                renderCorsoSelect();
+            }
+        };
+        if (accessoSitoGiaConsentito()) {
+            avviaApp();
         } else {
-            renderCorsoSelect();
+            renderAccessGate(avviaApp);
         }
     })();
     </script>
