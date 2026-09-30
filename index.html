@@ -707,7 +707,7 @@ let draftMateriale = { codice:"", descrizione:"", tipo:"MP", um:"PZ", giacenza:"
 let draftMM02 = { codiceSelezionato:"", scortaMinima:"0", scortaSicurezza:"0", puntoRiordino:"0" };
 let draftFornitore = { codice:"", ragioneSociale:"", indirizzo:"", citta:"", piva:"" };
 let draftCliente = { codice:"", ragioneSociale:"", indirizzo:"", citta:"", piva:"" };
-let draftDistinta = { prodotto:"", componenti:[{codice:"",qta:"1"}] };
+let draftDistinta = { prodotto:"", componenti:[{codice:"",qta:"1"}], _modificaOriginale: null };
 let draftOV = { cliente:"", riferimentoCliente:"", righe:[{prodotto:"", quantita:"1", dataRichiesta:""}] };
 let draftCO01 = { prodotto:"", quantita:"1", dataPianificata:"" };
 let mf50Quantita = {}; // deprecato (usato dalla vecchia UI a riga singola, non più renderizzata)
@@ -4427,19 +4427,24 @@ function renderCS01(el) {
   const materiePrime = materiali.filter(m => m.tipo === 'MP');
   const tabsCS01 = [{key:'testata', label:'① Testata'}, {key:'componenti', label:'② Componenti'}];
 
+  const inModifica = !!draftDistinta._modificaOriginale;
   el.innerHTML = `
     <div class="actionrow">
       ${cs01TabAttivo === 'componenti' ? '<button class="actionbtn" id="add-comp">+ Aggiungi componente</button>' : ''}
-      <button class="actionbtn" id="save-cs01">✔ Salva distinta base</button>
+      <button class="actionbtn" id="save-cs01">✔ ${inModifica ? 'Salva modifiche' : 'Salva distinta base'}</button>
+      ${inModifica ? '<button class="actionbtn" id="annulla-modifica-cs01">✕ Annulla modifica</button>' : ''}
     </div>
+    ${inModifica ? `<p style="font-size:11px;color:#1a4a7a;margin:6px 0 0 0;">✎ Stai modificando la distinta base di <strong>${materialeLabel(draftDistinta._modificaOriginale)}</strong>. Il prodotto finito non è modificabile: per cambiarlo, elimina questa distinta e creane una nuova.</p>` : ''}
     ${renderSapTabsHTML(tabsCS01, cs01TabAttivo)}
     <div class="formwrap">
       ${cs01TabAttivo === 'testata' ? `
       <div class="formgrid">
         <label>Prodotto finito</label>
-        ${campoF4HTML('f-prodotto', draftDistinta.prodotto ? materialeLabel(draftDistinta.prodotto) : '', '-- cerca prodotto finito (F4) --')}
+        ${inModifica
+          ? `<input type="text" readonly value="${materialeLabel(draftDistinta.prodotto).replace(/"/g,'&quot;')}" style="background:#ece9d8;">`
+          : campoF4HTML('f-prodotto', draftDistinta.prodotto ? materialeLabel(draftDistinta.prodotto) : '', '-- cerca prodotto finito (F4) --')}
       </div>
-      ${prodottiFiniti.length===0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun prodotto finito in anagrafica. Crea prima un materiale di tipo "Prodotto Finito" in MM01.</p>' : ''}
+      ${(!inModifica && prodottiFiniti.length===0) ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun prodotto finito in anagrafica. Crea prima un materiale di tipo "Prodotto Finito" in MM01.</p>' : ''}
       ` : `
       <div id="comp-rows" style="margin-top:10px;">
         ${draftDistinta.componenti.map((c,i) => `
@@ -4448,6 +4453,7 @@ function renderCS01(el) {
             <div style="display:flex; gap:6px;">
               <div style="flex:2;">${campoF4HTML('f-comp-codice-'+i, c.codice ? materialeLabel(c.codice) : '', '-- cerca materia prima (F4) --')}</div>
               <input class="comp-qta" data-i="${i}" type="number" min="0" step="0.01" value="${c.qta}" style="width:80px; font-size:11.5px; padding:3px; border:1px solid #7f9db9;" placeholder="Qtà">
+              ${draftDistinta.componenti.length > 1 ? `<span class="rowaction danger remove-comp" data-i="${i}" style="cursor:pointer;">rimuovi</span>` : ''}
             </div>
           </div>
         `).join('')}
@@ -4458,7 +4464,7 @@ function renderCS01(el) {
       <table>
         <thead><tr><th>Prodotto finito</th><th>Componenti</th><th>Creato da</th><th>Azioni</th></tr></thead>
         <tbody>${distinte.length===0 ? '<tr><td colspan="4" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna distinta base creata.</td></tr>' :
-          distinte.map(d => `<tr><td>${materialeLabel(d.prodotto)}</td><td>${d.componenti.map(c=>materialeLabel(c.codice)+' x'+c.qta).join(', ')}</td><td>${d.creatoDa}</td><td>${deleteActionCell('bom-'+d.prodotto)}</td></tr>`).join('')}
+          distinte.map(d => `<tr><td>${materialeLabel(d.prodotto)}</td><td>${d.componenti.map(c=>materialeLabel(c.codice)+' x'+c.qta).join(', ')}</td><td>${d.creatoDa}</td><td><span class="print-btn modifica-bom-btn" data-prodotto="${d.prodotto}" style="cursor:pointer; margin-right:8px;">✎ modifica</span>${deleteActionCell('bom-'+d.prodotto)}</td></tr>`).join('')}
         </tbody>
       </table>
     </div>
@@ -4471,18 +4477,46 @@ function renderCS01(el) {
       await eliminaRecord('distinte', prodotto);
       distinte = distinte.filter(d => d.prodotto !== prodotto);
       confirmDeleteKey = null;
+      if (draftDistinta._modificaOriginale === prodotto) { draftDistinta = { prodotto:"", componenti:[{codice:"",qta:"1"}], _modificaOriginale: null }; }
       setStatus(`Distinta base per ${prodotto} eliminata.`);
       renderMain();
     }));
   });
-  collegaF4('f-prodotto', 'Cerca prodotto finito', prodottiFiniti.map(p => ({ value: p.codice, label: materialeLabel(p.codice) })), (valore) => {
-    draftDistinta.prodotto = valore;
+  document.querySelectorAll('.modifica-bom-btn').forEach(elx => {
+    elx.addEventListener('click', () => {
+      const d = distinte.find(x => x.prodotto === elx.dataset.prodotto);
+      if (!d) return;
+      draftDistinta = {
+        prodotto: d.prodotto,
+        componenti: d.componenti.map(c => ({ codice: c.codice, qta: String(c.qta) })),
+        _modificaOriginale: d.prodotto,
+      };
+      cs01TabAttivo = 'componenti';
+      renderScreenContent();
+    });
+  });
+  const btnAnnullaModifica = document.getElementById('annulla-modifica-cs01');
+  if (btnAnnullaModifica) btnAnnullaModifica.addEventListener('click', () => {
+    draftDistinta = { prodotto:"", componenti:[{codice:"",qta:"1"}], _modificaOriginale: null };
+    cs01TabAttivo = 'testata';
     renderScreenContent();
   });
+  if (!inModifica) {
+    collegaF4('f-prodotto', 'Cerca prodotto finito', prodottiFiniti.map(p => ({ value: p.codice, label: materialeLabel(p.codice) })), (valore) => {
+      draftDistinta.prodotto = valore;
+      renderScreenContent();
+    });
+  }
   const btnAddComp = document.getElementById('add-comp');
   if (btnAddComp) btnAddComp.addEventListener('click', () => {
     draftDistinta.componenti.push({codice:"", qta:"1"});
     renderScreenContent();
+  });
+  document.querySelectorAll('.remove-comp').forEach(sp => {
+    sp.addEventListener('click', () => {
+      draftDistinta.componenti.splice(Number(sp.dataset.i), 1);
+      renderScreenContent();
+    });
   });
   attachSapTabsListeners(tab => { cs01TabAttivo = tab; renderScreenContent(); });
   draftDistinta.componenti.forEach((c, i) => {
@@ -4499,11 +4533,23 @@ function renderCS01(el) {
     const compValide = draftDistinta.componenti.filter(c => c.codice && Number(c.qta) > 0);
     if (compValide.length === 0) { setStatus('Aggiungi almeno un componente valido.', true); return; }
     distinte = await loadList('distinte');
-    if (distinte.some(d => d.prodotto === draftDistinta.prodotto)) { setStatus('Esiste già una distinta base per questo prodotto.', true); return; }
+    if (draftDistinta._modificaOriginale) {
+      const prodotto = draftDistinta._modificaOriginale;
+      if (!distinte.some(d => d.prodotto === prodotto)) { setStatus('Questa distinta base non esiste più (forse eliminata da un altro corsista).', true); draftDistinta = { prodotto:"", componenti:[{codice:"",qta:"1"}], _modificaOriginale: null }; renderMain(); return; }
+      await applicaPatch('distinte', prodotto, { componenti: compValide });
+      const d = distinte.find(x => x.prodotto === prodotto);
+      if (d) d.componenti = compValide;
+      draftDistinta = { prodotto:"", componenti:[{codice:"",qta:"1"}], _modificaOriginale: null };
+      cs01TabAttivo = 'testata';
+      setStatus(`Distinta base per ${prodotto} aggiornata con successo.`);
+      renderMain();
+      return;
+    }
+    if (distinte.some(d => d.prodotto === draftDistinta.prodotto)) { setStatus('Esiste già una distinta base per questo prodotto. Usa "✎ modifica" nell\'elenco per cambiarla.', true); return; }
     const rec = { prodotto: draftDistinta.prodotto, componenti: compValide, creatoDa: currentUser, creatoIl: nowStr() };
     await aggiungiRecord('distinte', rec);
     distinte.push(rec);
-    draftDistinta = { prodotto:"", componenti:[{codice:"",qta:"1"}] };
+    draftDistinta = { prodotto:"", componenti:[{codice:"",qta:"1"}], _modificaOriginale: null };
     cs01TabAttivo = 'testata';
     setStatus(`Distinta base per ${rec.prodotto} creata con successo.`);
     renderMain();
