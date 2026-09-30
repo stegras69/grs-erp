@@ -12,7 +12,7 @@
   .app-header-sticky { position:sticky; top:0; z-index:200; display:flex; flex-direction:column; background:#ece9d8; }
   .screen-sticky-top { position:sticky; top: var(--header-h); z-index:150; background:#ece9d8; }
 
-  .titlebar { display:flex; align-items:center; justify-content:space-between; padding:3px 8px; background:linear-gradient(to right,#2e5aa8,#5a89cf); color:white; }
+  .titlebar { display:flex; align-items:center; justify-content:space-between; padding:3px 8px; background:linear-gradient(to right,#00335c,#1b5c96); color:white; }
   .titlebar-left { display:flex; align-items:center; gap:6px; }
   .logo { width:22px; height:22px; background:linear-gradient(135deg, #0d1b2a 0%, #0d1b2a 52%, #16a974 100%); border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:800; color:#fff; font-family: Arial, sans-serif; letter-spacing:-0.5px; box-shadow:0 1px 2px rgba(0,0,0,.25); flex-shrink:0; }
   .titlebar span.name { font-size:11px; font-weight:600; }
@@ -94,7 +94,7 @@
   .msg-err { color:#a83232; font-weight:600; }
 
   /* Login overlay */
-  .login-overlay { position:fixed; inset:0; background:#1f3a5f; display:flex; align-items:center; justify-content:center; z-index:999; }
+  .login-overlay { position:fixed; inset:0; background:#00335c; display:flex; align-items:center; justify-content:center; z-index:999; }
   .login-box { background:#ece9d8; border:2px solid #7f9db9; padding:24px 28px; width:320px; box-shadow:0 8px 24px rgba(0,0,0,.3); }
   .login-box h2 { margin:0 0 4px 0; font-size:15px; color:#1a1a1a; }
   .login-box p { margin:0 0 16px 0; font-size:11px; color:#5a6470; }
@@ -778,6 +778,7 @@ const MENU = [
         { label: "CO01 - Crea ordine di produzione", active: true, screen:"CO01" },
         { label: "COOIS - Elenco ordini di produzione", active: true, screen:"COOIS" },
         { label: "CO15 - Conferma/evadi ordine di produzione", active: true, screen:"CO15" },
+        { label: "ZMR01 - Fabbisogno materiale da trasferire in officina", active: true, screen:"ZMR01" },
       ]},
     ]},
   ]},
@@ -1513,6 +1514,7 @@ function renderScreenContent() {
   else if (screen === 'LS01N') renderLocazioni(el);
   else if (screen === 'MB1B') renderMovStock(el);
   else if (screen === 'MB51') renderMovList(el);
+  else if (screen === 'ZMR01') renderZMR01(el);
   applicaLayoutSticky();
   abilitaOrdinamentoGenerico();
 }
@@ -1910,13 +1912,16 @@ function stampaMovimentoRicevimento(movimentoNumero) {
 // ============ VA01 ============
 function renderVA01(el) {
   const prodottiFiniti = materiali.filter(m => m.tipo === 'PF');
+  const tabsVA01 = [{key:'testata', label:'① Cliente'}, {key:'posizioni', label:'② Posizioni'}];
   el.innerHTML = `
     <div class="actionrow">
-      <button class="actionbtn" id="add-riga-ov">+ Aggiungi riga</button>
+      ${va01TabAttivo === 'posizioni' ? '<button class="actionbtn" id="add-riga-ov">+ Aggiungi riga</button>' : ''}
       <button class="actionbtn" id="clear-va01">🗑 Svuota bozza</button>
       <button class="actionbtn" id="save-va01">✔ Salva ordine di vendita</button>
     </div>
+    ${renderSapTabsHTML(tabsVA01, va01TabAttivo)}
     <div class="formwrap">
+      ${va01TabAttivo === 'testata' ? `
       <div class="formgrid">
         <label>Cliente</label>
         ${campoF4HTML('f-cliente', draftOV.cliente ? clienteLabel(draftOV.cliente) : '', '-- cerca cliente (F4) --')}
@@ -1924,6 +1929,7 @@ function renderVA01(el) {
       </div>
       ${clienti.length===0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun cliente in anagrafica: crealo prima in XD01.</p>' : ''}
       ${prodottiFiniti.length===0 ? '<p style="font-size:11px;color:#a83232;margin-top:4px;">Nessun prodotto finito in anagrafica: crealo prima in MM01.</p>' : ''}
+      ` : `
       <div style="margin-top:10px;">
         ${draftOV.righe.map((r,i) => `
           <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;" data-riga="${i}">
@@ -1935,6 +1941,7 @@ function renderVA01(el) {
           </div>
         `).join('')}
       </div>
+      `}
     </div>
     <div class="tablewrap">
       <table>
@@ -1949,15 +1956,20 @@ function renderVA01(el) {
     draftOV.cliente = valore;
     renderScreenContent();
   });
-  document.getElementById('f-rifcliente').addEventListener('input', e => draftOV.riferimentoCliente = e.target.value);
-  document.getElementById('add-riga-ov').addEventListener('click', () => {
+  const campoRifCliente = document.getElementById('f-rifcliente');
+  if (campoRifCliente) campoRifCliente.addEventListener('input', e => draftOV.riferimentoCliente = e.target.value);
+  const btnAddRigaOv = document.getElementById('add-riga-ov');
+  if (btnAddRigaOv) btnAddRigaOv.addEventListener('click', () => {
     draftOV.righe.push({ prodotto:"", quantita:"1", dataRichiesta:"" });
     renderScreenContent();
   });
   document.getElementById('clear-va01').addEventListener('click', () => {
     draftOV = { cliente:"", riferimentoCliente:"", righe:[{prodotto:"", quantita:"1", dataRichiesta:""}] };
+    va01TabAttivo = 'testata';
+    renderScreenContent();
     setStatus('Bozza svuotata.');
   });
+  attachSapTabsListeners(tab => { va01TabAttivo = tab; renderScreenContent(); });
   document.querySelectorAll('.remove-riga').forEach(sp => {
     sp.addEventListener('click', () => {
       draftOV.righe.splice(Number(sp.dataset.i), 1);
@@ -2002,6 +2014,7 @@ function renderVA01(el) {
     await aggiungiRecord('ordiniVendita', rec);
     ordiniVendita = [...out, rec];
     draftOV = { cliente:"", righe:[{prodotto:"", quantita:"1", dataRichiesta:""}] };
+    va01TabAttivo = 'testata';
     setStatus(`Ordine di vendita ${rec.numero} creato con successo (${righeValide.length} righe).`);
     renderMain();
   }));
@@ -2681,7 +2694,7 @@ function ordinatoApertoPer(codice) {
 
 function renderMD01(el) {
   const materiePrime = materiali.filter(m => m.tipo === 'MP');
-  const buckets = generateWeekBuckets(14, 8);
+  const buckets = generateBucketsMF50();
   const aperti = ordiniProduzione.filter(o => o.stato === 'aperto');
 
   function calcolaBucketMateriale(mp) {
@@ -2758,7 +2771,7 @@ function renderMD01(el) {
 
   el.innerHTML = `
     <div class="formwrap" style="padding-bottom:0;">
-      <p style="font-size:11px;color:#5a6470;margin:0 0 4px 0;">Fabbisogno di materie prime per periodo (giornaliero nei prossimi 14 giorni, poi settimanale), al netto di giacenza, richieste d'acquisto e ordini d'acquisto già aperti. Scrivi la quantità da richiedere nel periodo giusto, poi conferma.</p>
+      <p style="font-size:11px;color:#5a6470;margin:0 0 4px 0;">Fabbisogno di materie prime per periodo: una colonna unica "⚠ Arretrato" per tutto ciò che era già previsto prima di oggi, poi giornaliero fino al venerdì della terza settimana, poi settimanale — al netto di giacenza, richieste d'acquisto e ordini d'acquisto già aperti. Scrivi la quantità da richiedere nel periodo giusto, poi conferma.</p>
     </div>
     <div style="flex:1; overflow:auto;">
       ${materialiConFabbisogno.length === 0 ? '<p style="font-size:11px;color:#9a9a8f;margin:0 10px 10px 10px;">Nessun fabbisogno da ordini di produzione aperti al momento.</p>' : blocchiHTML()}
@@ -2797,7 +2810,7 @@ function renderMD01(el) {
         const qta = Number(mdCellDraft[key]) || 0;
         if (qta > 0) {
           const rec = {
-            numero: await prossimoNumero('RA'), materiale, quantita: qta, dataRichiesta: buckets[i].startISO,
+            numero: await prossimoNumero('RA'), materiale, quantita: qta, dataRichiesta: buckets[i].creaDataISO || buckets[i].startISO,
             stato: 'aperta', origine: 'MD01/MRP', creatoDa: currentUser, creatoIl: nowStr(),
           };
           creati.push(rec);
@@ -2819,16 +2832,23 @@ function renderMD01(el) {
 // ============ CO01 (creazione manuale ODP) ============
 function renderCO01(el) {
   const prodottiFiniti = materiali.filter(m => m.tipo === 'PF' && getBOM(m.codice));
+  const tabsCO01 = [{key:'generali', label:'① Dati generali'}, {key:'quantita', label:'② Quantità/Date'}];
   el.innerHTML = `
     <div class="actionrow"><button class="actionbtn" id="save-co01">✔ Crea ordine di produzione</button></div>
+    ${renderSapTabsHTML(tabsCO01, co01TabAttivo)}
     <div class="formwrap">
+      ${co01TabAttivo === 'generali' ? `
       <div class="formgrid">
         <label>Prodotto finito</label>
         ${campoF4HTML('f-prodotto', draftCO01.prodotto ? materialeLabel(draftCO01.prodotto) : '', '-- cerca prodotto finito (F4) --')}
+      </div>
+      ${prodottiFiniti.length===0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun prodotto finito con distinta base associata. Crea prima la BOM in CS01.</p>' : ''}
+      ` : `
+      <div class="formgrid">
         <label>Quantità da produrre</label><input id="f-qta" type="number" min="1" value="${draftCO01.quantita}">
         <label>Data pianificata</label><input id="f-dataPian" type="date" value="${draftCO01.dataPianificata||''}">
       </div>
-      ${prodottiFiniti.length===0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun prodotto finito con distinta base associata. Crea prima la BOM in CS01.</p>' : ''}
+      `}
       <p style="font-size:10.5px; color:#8a8a80; margin-top:8px;">Creazione manuale, indipendente da MF50/MRP — utile per produzioni non legate a un ordine cliente specifico (es. scorta).</p>
     </div>
   `;
@@ -2836,8 +2856,11 @@ function renderCO01(el) {
     draftCO01.prodotto = valore;
     renderScreenContent();
   });
-  document.getElementById('f-qta').addEventListener('input', e => draftCO01.quantita = e.target.value);
-  document.getElementById('f-dataPian').addEventListener('input', e => draftCO01.dataPianificata = e.target.value);
+  const campoQta = document.getElementById('f-qta');
+  if (campoQta) campoQta.addEventListener('input', e => draftCO01.quantita = e.target.value);
+  const campoDataPian = document.getElementById('f-dataPian');
+  if (campoDataPian) campoDataPian.addEventListener('input', e => draftCO01.dataPianificata = e.target.value);
+  attachSapTabsListeners(tab => { co01TabAttivo = tab; renderScreenContent(); });
   document.getElementById('save-co01').addEventListener('click', () => withGuard(async () => {
     if (!draftCO01.prodotto || Number(draftCO01.quantita) <= 0) { setStatus('Seleziona un prodotto e una quantità valida.', true); return; }
     if (!draftCO01.dataPianificata) { setStatus('Imposta una data pianificata.', true); return; }
@@ -2853,20 +2876,30 @@ function renderCO01(el) {
     await aggiungiRecord('ordiniProduzione', rec);
     ordiniProduzione.push(rec);
     draftCO01 = { prodotto:"", quantita:"1", dataPianificata:"" };
+    co01TabAttivo = 'generali';
     setStatus(`Ordine di produzione ${rec.numero} creato manualmente.`);
     renderMain();
   }));
 }
 
 // ============ COOIS (elenco ODP) ============
+let mostraEvasiCOOIS = false;
 function renderCOOIS(el) {
+  const evasi = ordiniProduzione.filter(o => o.stato === 'confermato');
+  const elenco = mostraEvasiCOOIS ? ordiniProduzione : ordiniProduzione.filter(o => o.stato !== 'confermato');
   el.innerHTML = `
+    <div class="formwrap" style="padding-bottom:0;">
+      <label style="font-size:11.5px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" id="chk-mostra-evasi-coois" ${mostraEvasiCOOIS?'checked':''}>
+        Mostra anche gli ordini già evasi (${evasi.length})
+      </label>
+    </div>
     <div class="tablewrap" style="margin-top:8px;">
       <table>
         <thead><tr><th>N. ordine</th><th>Prodotto</th><th>Quantità</th><th>Linea</th><th>Data pianificata</th><th>Origine</th><th>Stato</th><th>Creato da</th><th>Confermato da</th><th>Stampa</th><th>Azioni</th></tr></thead>
         <tbody>
-          ${ordiniProduzione.length===0 ? '<tr><td colspan="11" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun ordine di produzione.</td></tr>' :
-            ordiniProduzione.map(o => `
+          ${elenco.length===0 ? `<tr><td colspan="11" style="text-align:center;color:#9a9a8f;padding:16px;">${mostraEvasiCOOIS ? 'Nessun ordine di produzione.' : 'Nessun ordine di produzione aperto. Spunta sopra per vedere anche quelli già evasi.'}</td></tr>` :
+            elenco.map(o => `
               <tr>
                 <td>${o.numero}</td><td>${materialeLabel(o.prodotto)}</td><td>${o.quantita}</td><td>${o.linea || '-'}</td><td>${o.dataPianificata || '-'}</td><td>${o.origine}</td>
                 <td>${semaforoStatoOrdine(o.stato)}</td>
@@ -2880,6 +2913,10 @@ function renderCOOIS(el) {
       <p style="font-size:10px; color:#8a8a80; padding:6px 8px;">Annullando un ordine confermato, i componenti scaricati vengono riaccreditati in OFFICINA e il prodotto finito caricato viene rimosso da OFFICINA (può risultare negativo se nel frattempo è stato già spostato o spedito).</p>
     </div>
   `;
+  document.getElementById('chk-mostra-evasi-coois').addEventListener('change', e => {
+    mostraEvasiCOOIS = e.target.checked;
+    renderScreenContent();
+  });
   document.querySelectorAll('.stampa-op').forEach(elx => {
     elx.addEventListener('click', () => stampaOrdineProduzione(elx.dataset.numero));
   });
@@ -2957,6 +2994,73 @@ function renderCO15(el) {
       setStatus(`Ordine di produzione ${numero} confermato: prodotto finito creato in OFFICINA.`);
       renderMain();
     }));
+  });
+}
+
+// ============ ZMR01 (custom: fabbisogno materiale da trasferire in officina) ============
+// Non è un T-code SAP standard: è un report aggregato "fatto in casa" (da qui il prefisso Z,
+// come da convenzione SAP per gli sviluppi custom del cliente), che riassume — per tutti gli
+// ordini di produzione ancora APERTI — quanto materiale serve complessivamente in OFFICINA e
+// quanto manca ancora da trasferire lì, per evadere gli ODP con CO15 senza blocchi.
+function calcolaFabbisognoOfficina() {
+  const aperti = ordiniProduzione.filter(o => o.stato === 'aperto');
+  const perMateriale = {}; // { codice: { fabbisogno, ordini:Set } }
+  aperti.forEach(op => {
+    op.componenti.forEach(c => {
+      if (!perMateriale[c.codice]) perMateriale[c.codice] = { fabbisogno: 0, ordini: [] };
+      perMateriale[c.codice].fabbisogno += c.qtaTotale;
+      perMateriale[c.codice].ordini.push(op.numero);
+    });
+  });
+  return Object.keys(perMateriale).map(codice => {
+    const { fabbisogno, ordini } = perMateriale[codice];
+    const inOfficina = getGiacenzaLoc(codice, 'OFFICINA');
+    const totale = getGiacenza(codice);
+    const disponibileAltrove = Math.max(0, totale - inOfficina);
+    const daTrasferire = Math.max(0, fabbisogno - inOfficina);
+    const trasferibileOra = Math.min(daTrasferire, disponibileAltrove);
+    const mancanteAssoluto = Math.max(0, daTrasferire - disponibileAltrove);
+    return { codice, fabbisogno, inOfficina, disponibileAltrove, daTrasferire, trasferibileOra, mancanteAssoluto, ordini: [...new Set(ordini)] };
+  }).filter(r => r.fabbisogno > 0).sort((a, b) => b.mancanteAssoluto - a.mancanteAssoluto || b.daTrasferire - a.daTrasferire);
+}
+
+function renderZMR01(el) {
+  const righe = calcolaFabbisognoOfficina();
+  el.innerHTML = `
+    <div class="actionrow">
+      <button class="actionbtn" id="scarica-zmr01">📥 Scarica CSV</button>
+    </div>
+    <div class="formwrap" style="padding-bottom:0;">
+      <p style="font-size:11px;color:#5a6470;margin:0 0 4px 0;">Riepilogo del materiale necessario in OFFICINA per evadere (CO15) tutti gli ordini di produzione ancora aperti in questo momento. "Da trasferire" è già al netto di ciò che è già in OFFICINA; se supera la disponibilità nelle altre ubicazioni, la differenza compare in rosso come mancante (serve acquistarlo, non solo spostarlo).</p>
+    </div>
+    <div class="tablewrap" style="margin-top:0;">
+      <table>
+        <thead><tr><th>Materiale</th><th>Fabbisogno totale (ODP aperti)</th><th>Già in OFFICINA</th><th>Disponibile altrove</th><th>Da trasferire</th><th>Mancante (da acquistare)</th><th>Ordini coinvolti</th></tr></thead>
+        <tbody>${righe.length===0 ? '<tr><td colspan="7" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun fabbisogno: nessun ordine di produzione aperto al momento.</td></tr>' :
+          righe.map(r => `
+            <tr>
+              <td>${materialeLabel(r.codice)}</td>
+              <td style="text-align:center;">${r.fabbisogno}</td>
+              <td style="text-align:center;">${r.inOfficina}</td>
+              <td style="text-align:center;">${r.disponibileAltrove}</td>
+              <td style="text-align:center; font-weight:600; color:${r.daTrasferire>0?'#a86a1a':'#1a6b2e'};">${r.daTrasferire}</td>
+              <td style="text-align:center; font-weight:600; color:${r.mancanteAssoluto>0?'#a83232':'#9a9a8f'};">${r.mancanteAssoluto||''}</td>
+              <td style="font-size:10px;">${r.ordini.join(', ')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+  document.getElementById('scarica-zmr01').addEventListener('click', () => {
+    esportaCSV(
+      'ZMR01_fabbisogno_officina_' + isoDate(new Date()) + '.csv',
+      ['Materiale', 'Descrizione', 'Fabbisogno totale', 'Già in OFFICINA', 'Disponibile altrove', 'Da trasferire', 'Mancante da acquistare', 'Ordini coinvolti'],
+      righe.map(r => {
+        const mat = materiali.find(m => m.codice === r.codice);
+        return [r.codice, mat ? mat.descrizione : '', r.fabbisogno, r.inOfficina, r.disponibileAltrove, r.daTrasferire, r.mancanteAssoluto, r.ordini.join(' ')];
+      })
+    );
   });
 }
 
@@ -3079,19 +3183,30 @@ function renderME21N(el) {
     `;
   }
 
+  const tabsME21N = [
+    { key: 'testata', label: '① Dati testata' },
+    { key: 'posizioni', label: '② Posizioni' },
+  ];
   el.innerHTML = `
     <div class="actionrow"><button class="actionbtn" id="save-po">✔ Crea ordine d'acquisto</button></div>
+    <div class="formwrap" style="padding-bottom:0;">
+      ${renderSapTabsHTML(tabsME21N, me21nTabAttivo)}
+    </div>
+    ${me21nTabAttivo === 'testata' ? `
     <div class="formwrap">
       <div class="formgrid">
         <label>Fornitore</label>
         ${campoF4HTML('f-fornitore', draftPO.fornitore ? fornitoreLabel(draftPO.fornitore) : '', '-- cerca fornitore (F4) --')}
       </div>
       ${fornitori.length===0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun fornitore in anagrafica: crealo prima in XK01.</p>' : ''}
+      <p style="font-size:10.5px; color:#8a8a80; margin-top:8px;">Scegli il fornitore, poi passa alla scheda "② Posizioni" per selezionare le richieste d'acquisto da includere.</p>
     </div>
+    ` : `
     <div class="formwrap" style="padding-top:0;">
       <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Seleziona una o più richieste d'acquisto aperte da includere in questo ordine (diventerà un ordine multi-riga):</p>
       ${listaHTML}
     </div>
+    `}
     <div class="tablewrap">
       <table>
         <thead><tr><th>N. ordine</th><th>Fornitore</th><th>Materiale</th><th>Quantità</th><th>Prezzo unit.</th><th>Data consegna</th><th>Stato</th><th>Creato da</th><th>Stampa</th><th>Azioni</th></tr></thead>
@@ -3109,6 +3224,7 @@ function renderME21N(el) {
       <p style="font-size:10px; color:#8a8a80; padding:6px 8px;">Annullando una riga d'ordine, la richiesta d'acquisto (RA) che l'aveva generata torna disponibile per essere riordinata o eliminata. Una riga già ricevuta (anche solo in parte, da MIGO) non può essere annullata; le altre righe dello stesso ordine restano annullabili singolarmente. Se annulli l'ultima riga attiva, l'intero ordine viene rimosso.</p>
     </div>
   `;
+  attachSapTabsListeners(tab => { me21nTabAttivo = tab; renderScreenContent(); });
   collegaF4('f-fornitore', 'Cerca fornitore', fornitori.map(f => ({ value: f.codice, label: fornitoreLabel(f.codice) })), (valore) => {
     draftPO.fornitore = valore;
     renderScreenContent();
@@ -3191,6 +3307,7 @@ function renderME21N(el) {
     ordiniAcquisto.push(rec);
     for (const r of selezionati) { await applicaPatch('richiesteAcquisto', r.numero, { stato: 'convertita' }); r.stato = 'convertita'; }
     draftPO = { fornitore:"", selezionate:{} };
+    me21nTabAttivo = 'testata';
     setStatus(`Ordine d'acquisto ${rec.numero} creato con ${righe.length} riga/e per il fornitore ${rec.fornitore}.`);
     renderMain();
   }));
@@ -4031,6 +4148,10 @@ function renderCruscotto(el) {
 // finché non si cambia materiale/schermata, così passare da una scheda all'altra non perde nulla
 // di ciò che si è già scritto nell'altra.
 let mm01TabAttivo = 'base';
+let me21nTabAttivo = 'testata';
+let va01TabAttivo = 'testata';
+let co01TabAttivo = 'testata';
+let cs01TabAttivo = 'testata';
 function renderMM01(el) {
   const tabs = [
     { key: 'base', label: '① Dati base' },
@@ -4304,18 +4425,22 @@ function renderXD01(el) {
 function renderCS01(el) {
   const prodottiFiniti = materiali.filter(m => m.tipo === 'PF');
   const materiePrime = materiali.filter(m => m.tipo === 'MP');
+  const tabsCS01 = [{key:'testata', label:'① Testata'}, {key:'componenti', label:'② Componenti'}];
 
   el.innerHTML = `
     <div class="actionrow">
-      <button class="actionbtn" id="add-comp">+ Aggiungi componente</button>
+      ${cs01TabAttivo === 'componenti' ? '<button class="actionbtn" id="add-comp">+ Aggiungi componente</button>' : ''}
       <button class="actionbtn" id="save-cs01">✔ Salva distinta base</button>
     </div>
+    ${renderSapTabsHTML(tabsCS01, cs01TabAttivo)}
     <div class="formwrap">
+      ${cs01TabAttivo === 'testata' ? `
       <div class="formgrid">
         <label>Prodotto finito</label>
         ${campoF4HTML('f-prodotto', draftDistinta.prodotto ? materialeLabel(draftDistinta.prodotto) : '', '-- cerca prodotto finito (F4) --')}
       </div>
       ${prodottiFiniti.length===0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun prodotto finito in anagrafica. Crea prima un materiale di tipo "Prodotto Finito" in MM01.</p>' : ''}
+      ` : `
       <div id="comp-rows" style="margin-top:10px;">
         ${draftDistinta.componenti.map((c,i) => `
           <div class="formgrid" style="margin-bottom:4px;" data-comprow="${i}">
@@ -4327,6 +4452,7 @@ function renderCS01(el) {
           </div>
         `).join('')}
       </div>
+      `}
     </div>
     <div class="tablewrap">
       <table>
@@ -4353,10 +4479,12 @@ function renderCS01(el) {
     draftDistinta.prodotto = valore;
     renderScreenContent();
   });
-  document.getElementById('add-comp').addEventListener('click', () => {
+  const btnAddComp = document.getElementById('add-comp');
+  if (btnAddComp) btnAddComp.addEventListener('click', () => {
     draftDistinta.componenti.push({codice:"", qta:"1"});
     renderScreenContent();
   });
+  attachSapTabsListeners(tab => { cs01TabAttivo = tab; renderScreenContent(); });
   draftDistinta.componenti.forEach((c, i) => {
     collegaF4('f-comp-codice-'+i, 'Cerca materia prima', materiePrime.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
       draftDistinta.componenti[i].codice = valore;
@@ -4376,6 +4504,7 @@ function renderCS01(el) {
     await aggiungiRecord('distinte', rec);
     distinte.push(rec);
     draftDistinta = { prodotto:"", componenti:[{codice:"",qta:"1"}] };
+    cs01TabAttivo = 'testata';
     setStatus(`Distinta base per ${rec.prodotto} creata con successo.`);
     renderMain();
   }));
