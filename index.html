@@ -2233,6 +2233,25 @@ function renderMF50(el) {
         if (!perCodice[o.prodotto]) perCodice[o.prodotto] = new Array(buckets.length).fill(0);
         perCodice[o.prodotto][idx] += o.quantita;
       });
+      // Aggiunge in tempo reale anche quanto scritto in "Da aggiungere ora" per i prodotti
+      // assegnati a questa linea, ANCHE prima di generare gli ordini di produzione: così il
+      // recap qui sopra riflette subito la pianificazione digitata più sotto, non solo dopo
+      // aver confermato con "Genera ordini di produzione".
+      righeCalc.forEach(r => {
+        const lineeRiga = r.linee.length > 0 ? r.linee : [null];
+        lineeRiga.forEach(l => {
+          if ((l || '(non assegnata)') !== lineaKey) return;
+          const key = l || '_';
+          for (let i = 0; i < buckets.length; i++) {
+            const cellKey = `${r.codice}::${key}::${i}`;
+            const daAggiungere = mf50CellDraft[cellKey] !== undefined ? (Number(mf50CellDraft[cellKey]) || 0) : 0;
+            if (daAggiungere === 0) continue;
+            totalePerBucket[i] += daAggiungere;
+            if (!perCodice[r.codice]) perCodice[r.codice] = new Array(buckets.length).fill(0);
+            perCodice[r.codice][i] += daAggiungere;
+          }
+        });
+      });
       const infoLinea = lineeProduzione.find(l => l.codice === lineaKey);
       const nomeLinea = lineaKey === '(non assegnata)' ? '(non assegnata)' : (infoLinea ? `${lineaKey} - ${infoLinea.descrizione}` : lineaKey);
       const capacitaMax = infoLinea ? Number(infoLinea.capacitaMax) || 0 : 0;
@@ -2267,7 +2286,11 @@ function renderMF50(el) {
   // ---- Matrice settimanale EDITABILE (unico punto di pianificazione) ----
   function existingPlanPerWeek(codice, linea) {
     const arr = new Array(buckets.length).fill(0);
-    ordiniProduzione.filter(o => o.prodotto === codice && (o.linea || null) === (linea || null)).forEach(o => {
+    // NB: solo ordini "aperto" — un ordine "confermato" ha già generato il prodotto finito
+    // (la giacenza lo riflette), quindi non va più contato come "pianificato futuro" qui:
+    // altrimenti questa riga mostra un valore che il recap "Totale linea" qui sopra (che conta
+    // solo gli ordini aperti) non riflette, disallineando i due totali.
+    ordiniProduzione.filter(o => o.stato === 'aperto' && o.prodotto === codice && (o.linea || null) === (linea || null)).forEach(o => {
       const idx = bucketIndexForDate(o.dataPianificata, buckets);
       if (idx !== null) arr[idx] += o.quantita;
     });
@@ -2365,7 +2388,7 @@ function renderMF50(el) {
     </div>
     <div style="flex:1; overflow:auto;">
       ${lineeProduzione.length === 0 ? '<p style="font-size:11px;color:#a83232;margin:0 10px 10px 10px;">Nessuna linea di produzione definita: crearle in CR01 per vedere il recap qui sotto.</p>' : ''}
-      ${recapPerLineaHTML()}
+      <div id="mf50-recap-linee">${recapPerLineaHTML()}</div>
       <div style="margin:0 10px 6px 10px; border-top:2px solid #b9c4d6; padding-top:10px;">
         <strong style="font-size:13px;">📅 Piano per prodotto — scrivi qui per pianificare</strong>
         <p style="font-size:10.5px; color:#8a8a80; margin:2px 0 10px 0;">Colonna "⚠ Arretrato": tutto ciò che è nel passato, aggregato in un unico totale (un nuovo ordine generato da qui viene datato ad oggi). Da oggi fino al venerdì della 3ª settimana: colonne giornaliere. Da lì in poi: colonne settimanali. La riga "✓ Già programmato" (sola lettura, sempre visibile) mostra quanto è già stato generato in ordini di produzione per quel periodo/linea. La riga "↳ Da aggiungere ora" è dove scrivi SOLO la quantità aggiuntiva da generare: parte sempre vuota, così un click su "Genera" senza nuovi numeri non crea nulla di duplicato. "Giacenza proiettata" è la giacenza attesa a fine periodo se tutto va come pianificato (già programmato + da aggiungere ora): se scende sotto zero, la copertura non basta ancora.</p>
@@ -2408,6 +2431,10 @@ function renderMF50(el) {
         td.textContent = proiez[i];
         td.style.color = proiez[i] < 0 ? '#a83232' : '#1a6b2e';
       });
+      // ricalcola anche il recap per linea qui sopra: deve riflettere in tempo reale quanto
+      // scritto qui sotto, anche prima di generare gli ordini di produzione.
+      const recapEl = document.getElementById('mf50-recap-linee');
+      if (recapEl) recapEl.innerHTML = recapPerLineaHTML();
     });
   });
 
