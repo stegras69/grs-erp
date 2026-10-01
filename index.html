@@ -3011,12 +3011,34 @@ function renderCO01(el) {
 
 // ============ COOIS (elenco ODP) ============
 let mostraEvasiCOOIS = false;
-let dataEvasioneCO15Draft = {}; // { numeroOrdine: 'YYYY-MM-DD' } — data di evasione scelta dal corsista, default oggi
+let sortCOOIS = { campo: null, asc: true };
 let zmr01DataLimite = ''; // '' = nessun filtro (tutti gli ODP aperti); altrimenti YYYY-MM-DD = considera solo gli ODP con data pianificata fino a questa data
 let confirmForzaConfermaKey = null; // numero ordine in attesa di conferma per "segna come già evaso" (recupero manuale)
 function renderCOOIS(el) {
   const evasi = ordiniProduzione.filter(o => o.stato === 'confermato');
-  const elenco = mostraEvasiCOOIS ? ordiniProduzione : ordiniProduzione.filter(o => o.stato !== 'confermato');
+  let elenco = mostraEvasiCOOIS ? ordiniProduzione.slice() : ordiniProduzione.filter(o => o.stato !== 'confermato');
+  const colonneCOOIS = [
+    { campo:'numero', label:'N. ordine' },
+    { campo:'prodotto', label:'Prodotto', get:o=>materialeLabel(o.prodotto) },
+    { campo:'quantita', label:'Quantità' },
+    { campo:'linea', label:'Linea' },
+    { campo:'dataPianificata', label:'Data pianificata' },
+    { campo:'origine', label:'Origine' },
+    { campo:'stato', label:'Stato' },
+    { campo:'creatoDa', label:'Creato da' },
+    { campo:'confermatoDa', label:'Confermato da' },
+    { campo:'dataEvasione', label:'Data evasione' },
+  ];
+  if (sortCOOIS.campo) {
+    const col = colonneCOOIS.find(c => c.campo === sortCOOIS.campo);
+    elenco.sort((a,b) => {
+      let va = col.get ? col.get(a) : a[sortCOOIS.campo];
+      let vb = col.get ? col.get(b) : b[sortCOOIS.campo];
+      if (sortCOOIS.campo === 'quantita') { va = Number(va)||0; vb = Number(vb)||0; return sortCOOIS.asc ? va-vb : vb-va; }
+      va = String(va==null?'':va); vb = String(vb==null?'':vb);
+      return sortCOOIS.asc ? va.localeCompare(vb) : vb.localeCompare(va);
+    });
+  }
   el.innerHTML = `
     <div class="formwrap" style="padding-bottom:0;">
       <label style="font-size:11.5px; display:flex; align-items:center; gap:6px; cursor:pointer;">
@@ -3026,7 +3048,7 @@ function renderCOOIS(el) {
     </div>
     <div class="tablewrap" style="margin-top:8px;">
       <table>
-        <thead><tr><th>N. ordine</th><th>Prodotto</th><th>Quantità</th><th>Linea</th><th>Data pianificata</th><th>Origine</th><th>Stato</th><th>Creato da</th><th>Confermato da</th><th>Data evasione</th><th>Stampa</th><th>Azioni</th></tr></thead>
+        <thead><tr>${colonneCOOIS.map(c => `<th class="coois-sort-th" data-campo="${c.campo}" style="cursor:pointer; user-select:none;" title="Clicca per ordinare">${c.label}${sortCOOIS.campo===c.campo ? (sortCOOIS.asc?' ▲':' ▼') : ''}</th>`).join('')}<th>Stampa</th><th>Azioni</th></tr></thead>
         <tbody>
           ${elenco.length===0 ? `<tr><td colspan="12" style="text-align:center;color:#9a9a8f;padding:16px;">${mostraEvasiCOOIS ? 'Nessun ordine di produzione.' : 'Nessun ordine di produzione aperto. Spunta sopra per vedere anche quelli già evasi.'}</td></tr>` :
             elenco.map(o => `
@@ -3056,6 +3078,13 @@ function renderCOOIS(el) {
   document.getElementById('chk-mostra-evasi-coois').addEventListener('change', e => {
     mostraEvasiCOOIS = e.target.checked;
     renderScreenContent();
+  });
+  document.querySelectorAll('.coois-sort-th').forEach(th => {
+    th.addEventListener('click', () => {
+      if (sortCOOIS.campo === th.dataset.campo) sortCOOIS.asc = !sortCOOIS.asc;
+      else { sortCOOIS.campo = th.dataset.campo; sortCOOIS.asc = true; }
+      renderScreenContent();
+    });
   });
   document.querySelectorAll('.stampa-op').forEach(elx => {
     elx.addEventListener('click', () => stampaOrdineProduzione(elx.dataset.numero));
@@ -3125,28 +3154,28 @@ function renderCO15(el) {
   const oggiISO = isoDate(new Date());
   el.innerHTML = `
     <div class="formwrap" style="padding-bottom:0;">
-      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Conferma un ordine di produzione: scarica i componenti <strong>dall'ubicazione OFFICINA</strong> e carica il prodotto finito in OFFICINA. Se il materiale non è ancora stato spostato in officina, l'evasione viene bloccata. La data di evasione è impostata su oggi, modificabile prima di confermare.</p>
+      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Conferma un ordine di produzione: scarica i componenti <strong>dall'ubicazione OFFICINA</strong> e carica il prodotto finito in OFFICINA. Se il materiale non è ancora stato spostato in officina, l'evasione viene bloccata.</p>
     </div>
     <div class="tablewrap" style="margin-top:0;">
       <table>
-        <thead><tr><th>N. ordine</th><th>Prodotto</th><th>Quantità</th><th>Componenti richiesti (disponibilità in OFFICINA)</th><th>Data evasione</th><th>Azione</th></tr></thead>
+        <thead><tr><th>N. ordine</th><th>Prodotto</th><th>Quantità</th><th>Componenti richiesti (disponibilità in OFFICINA)</th><th>Data scadenza</th><th>Azione</th></tr></thead>
         <tbody>
           ${aperti.length===0 ? '<tr><td colspan="6" style="text-align:center;color:#9a9a8f;padding:16px;">Nessun ordine di produzione aperto da evadere.</td></tr>' :
-            aperti.map(o => `
+            aperti.map(o => {
+              const scaduto = o.dataPianificata && o.dataPianificata < oggiISO;
+              return `
               <tr>
                 <td>${o.numero}</td><td>${materialeLabel(o.prodotto)}</td><td>${o.quantita}</td>
                 <td style="font-size:10.5px;">${o.componenti.map(c => c.codice+' x'+c.qtaTotale+' (in OFFICINA: '+getGiacenzaLoc(c.codice,'OFFICINA')+')').join(', ')}</td>
-                <td><input type="date" class="data-evasione-co15" data-numero="${o.numero}" value="${dataEvasioneCO15Draft[o.numero] || oggiISO}" style="font-size:11px; padding:3px; border:1px solid #7f9db9;"></td>
+                <td style="color:${scaduto?'#a83232':'#1a1a1a'}; font-weight:${scaduto?'600':'400'};">${o.dataPianificata || '-'}${scaduto?' ⚠️':''}</td>
                 <td><button class="actionbtn conferma-op" data-numero="${o.numero}" style="padding:3px 8px; font-size:10.5px;">✔ Conferma (CO15)</button></td>
               </tr>
-            `).join('')}
+            `;
+            }).join('')}
         </tbody>
       </table>
     </div>
   `;
-  document.querySelectorAll('.data-evasione-co15').forEach(inp => {
-    inp.addEventListener('input', e => { dataEvasioneCO15Draft[e.target.dataset.numero] = e.target.value; });
-  });
   document.querySelectorAll('.conferma-op').forEach(btn => {
     btn.addEventListener('click', () => withGuard(async () => {
       const numero = btn.dataset.numero;
@@ -3157,7 +3186,7 @@ function renderCO15(el) {
         setStatus(`Evasione bloccata: materiale insufficiente in OFFICINA per ${mancanti.map(m=>m.codice).join(', ')}. Sposta il materiale da magazzino a officina.`, true);
         return;
       }
-      const dataEvasione = dataEvasioneCO15Draft[numero] || oggiISO;
+      const dataEvasione = oggiISO;
       for (const c of op.componenti) {
         await registraMovimento({ materiale: c.codice, locazioneDa: 'OFFICINA', locazioneA: null, quantita: c.qtaTotale, causale: 'Consumo produzione CO15 (' + numero + ')' });
       }
@@ -3182,7 +3211,6 @@ function renderCO15(el) {
       op.confermatoDa = currentUser;
       op.confermatoIl = confermaIl;
       op.dataEvasione = dataEvasione;
-      delete dataEvasioneCO15Draft[numero];
       setStatus(`Ordine di produzione ${numero} confermato (evaso il ${dataEvasione}): prodotto finito creato in OFFICINA.`);
       renderMain();
     }));
@@ -3840,10 +3868,7 @@ function renderLS24(el) {
     <div class="formwrap">
       <div class="formgrid">
         <label>Materiale</label>
-        <select id="f-ls24-materiale">
-          <option value="">-- tutti --</option>
-          ${materiali.map(m => `<option value="${m.codice}" ${filtroLS24.materiale===m.codice?'selected':''}>${m.codice} - ${m.descrizione}</option>`).join('')}
-        </select>
+        <div>${campoF4HTML('f-ls24-materiale', filtroLS24.materiale ? materialeLabel(filtroLS24.materiale) : '', '-- tutti (F4 per filtrare) --')}${filtroLS24.materiale ? ' <span class="rowaction ls24-azzera-materiale" style="cursor:pointer;">✕ azzera</span>' : ''}</div>
         <label>Ubicazione</label>
         <select id="f-ls24-locazione">
           <option value="">-- tutte --</option>
@@ -3866,7 +3891,12 @@ function renderLS24(el) {
       </table>
     </div>
   `;
-  document.getElementById('f-ls24-materiale').addEventListener('change', e => { filtroLS24.materiale = e.target.value; renderScreenContent(); });
+  collegaF4('f-ls24-materiale', 'Cerca materiale', materiali.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
+    filtroLS24.materiale = valore;
+    renderScreenContent();
+  });
+  const azzeraMatLS24 = document.querySelector('.ls24-azzera-materiale');
+  if (azzeraMatLS24) azzeraMatLS24.addEventListener('click', () => { filtroLS24.materiale = ''; renderScreenContent(); });
   document.getElementById('f-ls24-locazione').addEventListener('change', e => { filtroLS24.locazione = e.target.value; renderScreenContent(); });
   document.getElementById('f-ls24-solocongiacenza').addEventListener('change', e => { filtroLS24.soloConGiacenza = e.target.value === 'si'; renderScreenContent(); });
   document.querySelectorAll('.ls24-sort-th').forEach(th => {
@@ -4062,25 +4092,16 @@ function renderMovList(el) {
     <div class="formwrap">
       <div class="formgrid">
         <label>Filtra per materiale</label>
-        <select id="f-filtro-materiale">
-          <option value="">-- tutti --</option>
-          ${materiali.map(m => `<option value="${m.codice}" ${filtroMov.materiale===m.codice?'selected':''}>${m.codice} - ${m.descrizione}</option>`).join('')}
-        </select>
+        <div>${campoF4HTML('f-filtro-materiale', filtroMov.materiale ? materialeLabel(filtroMov.materiale) : '', '-- tutti (F4 per filtrare) --')}${filtroMov.materiale ? ' <span class="rowaction mb51-azzera-materiale" style="cursor:pointer;">✕ azzera</span>' : ''}</div>
         <label>Filtra per tipo</label>
         <select id="f-filtro-tipo">
           <option value="">-- tutti --</option>
           ${tipiPresenti.map(t => `<option value="${t}" ${filtroMov.tipo===t?'selected':''}>${t}</option>`).join('')}
         </select>
         <label>Filtra per causale</label>
-        <select id="f-filtro-causale">
-          <option value="">-- tutte --</option>
-          ${causaliPresenti.map(c => `<option value="${c}" ${filtroMov.causale===c?'selected':''}>${c}</option>`).join('')}
-        </select>
+        <div>${campoF4HTML('f-filtro-causale', filtroMov.causale || '', '-- tutte (F4 per filtrare) --')}${filtroMov.causale ? ' <span class="rowaction mb51-azzera-causale" style="cursor:pointer;">✕ azzera</span>' : ''}</div>
         <label>Filtra per fornitore/cliente</label>
-        <select id="f-filtro-controparte">
-          <option value="">-- tutti --</option>
-          ${contropartiPresenti.map(c => `<option value="${c}" ${filtroMov.controparte===c?'selected':''}>${c}</option>`).join('')}
-        </select>
+        <div>${campoF4HTML('f-filtro-controparte', filtroMov.controparte || '', '-- tutti (F4 per filtrare) --')}${filtroMov.controparte ? ' <span class="rowaction mb51-azzera-controparte" style="cursor:pointer;">✕ azzera</span>' : ''}</div>
         <label>Data da</label><input id="f-filtro-da" type="date" value="${filtroMov.dataDa}">
         <label>Data a</label><input id="f-filtro-a" type="date" value="${filtroMov.dataA}">
       </div>
@@ -4111,10 +4132,25 @@ function renderMovList(el) {
       renderScreenContent();
     });
   });
-  document.getElementById('f-filtro-materiale').addEventListener('change', e => { filtroMov.materiale = e.target.value; renderScreenContent(); });
+  collegaF4('f-filtro-materiale', 'Cerca materiale', materiali.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
+    filtroMov.materiale = valore;
+    renderScreenContent();
+  });
+  const azzeraMatMB51 = document.querySelector('.mb51-azzera-materiale');
+  if (azzeraMatMB51) azzeraMatMB51.addEventListener('click', () => { filtroMov.materiale = ''; renderScreenContent(); });
   document.getElementById('f-filtro-tipo').addEventListener('change', e => { filtroMov.tipo = e.target.value; renderScreenContent(); });
-  document.getElementById('f-filtro-causale').addEventListener('change', e => { filtroMov.causale = e.target.value; renderScreenContent(); });
-  document.getElementById('f-filtro-controparte').addEventListener('change', e => { filtroMov.controparte = e.target.value; renderScreenContent(); });
+  collegaF4('f-filtro-causale', 'Cerca causale', causaliPresenti.map(c => ({ value: c, label: c })), (valore) => {
+    filtroMov.causale = valore;
+    renderScreenContent();
+  });
+  const azzeraCausaleMB51 = document.querySelector('.mb51-azzera-causale');
+  if (azzeraCausaleMB51) azzeraCausaleMB51.addEventListener('click', () => { filtroMov.causale = ''; renderScreenContent(); });
+  collegaF4('f-filtro-controparte', 'Cerca fornitore/cliente', contropartiPresenti.map(c => ({ value: c, label: c })), (valore) => {
+    filtroMov.controparte = valore;
+    renderScreenContent();
+  });
+  const azzeraContropartMB51 = document.querySelector('.mb51-azzera-controparte');
+  if (azzeraContropartMB51) azzeraContropartMB51.addEventListener('click', () => { filtroMov.controparte = ''; renderScreenContent(); });
   document.getElementById('f-filtro-da').addEventListener('input', e => { filtroMov.dataDa = e.target.value; renderScreenContent(); });
   document.getElementById('f-filtro-a').addEventListener('input', e => { filtroMov.dataA = e.target.value; renderScreenContent(); });
   document.getElementById('export-mov').addEventListener('click', () => {
@@ -4361,6 +4397,8 @@ let me21nTabAttivo = 'testata';
 let va01TabAttivo = 'testata';
 let co01TabAttivo = 'testata';
 let cs01TabAttivo = 'testata';
+let xd01TabAttivo = 'indirizzo';
+let xk01TabAttivo = 'indirizzo';
 let cs02TabAttivo = 'testata';
 function renderMM01(el) {
   const tabs = [
@@ -4500,18 +4538,46 @@ function renderMM02(el) {
 }
 
 // ============ MM03 (list) ============
+let sortMM03 = { campo: null, asc: true };
 function renderMM03(el) {
+  const colonne = [
+    { campo:'codice', label:'Codice' },
+    { campo:'descrizione', label:'Descrizione' },
+    { campo:'tipo', label:'Tipo', get:m=>m.tipo==='MP'?'Materia Prima':'Prodotto Finito' },
+    { campo:'um', label:'UM' },
+    { campo:'giacenza', label:'Giacenza', get:m=>getGiacenza(m.codice) },
+    { campo:'creatoDa', label:'Creato da' },
+    { campo:'creatoIl', label:'Data' },
+  ];
+  let elenco = materiali.slice();
+  if (sortMM03.campo) {
+    const col = colonne.find(c => c.campo === sortMM03.campo);
+    elenco.sort((a,b) => {
+      let va = col.get ? col.get(a) : a[sortMM03.campo];
+      let vb = col.get ? col.get(b) : b[sortMM03.campo];
+      if (sortMM03.campo === 'giacenza') { va = Number(va)||0; vb = Number(vb)||0; return sortMM03.asc ? va-vb : vb-va; }
+      va = String(va==null?'':va); vb = String(vb==null?'':vb);
+      return sortMM03.asc ? va.localeCompare(vb) : vb.localeCompare(va);
+    });
+  }
   el.innerHTML = `
     <div class="tablewrap" style="margin-top:8px;">
       <table>
-        <thead><tr><th>Codice</th><th>Descrizione</th><th>Tipo</th><th>UM</th><th>Giacenza</th><th>Creato da</th><th>Data</th><th>Azioni</th></tr></thead>
+        <thead><tr>${colonne.map(c => `<th class="mm03-sort-th" data-campo="${c.campo}" style="cursor:pointer; user-select:none;" title="Clicca per ordinare">${c.label}${sortMM03.campo===c.campo ? (sortMM03.asc?' ▲':' ▼') : ''}</th>`).join('')}<th>Azioni</th></tr></thead>
         <tbody>
-          ${materiali.length === 0 ? '<tr><td colspan="8" style="text-align:center; color:#9a9a8f; padding:16px;">Nessun materiale in anagrafica. Usa MM01 per crearne uno.</td></tr>' :
-            materiali.map(m => `<tr><td>${m.codice}</td><td>${m.descrizione}</td><td>${m.tipo==='MP'?'Materia Prima':'Prodotto Finito'}</td><td>${m.um}</td><td>${getGiacenza(m.codice)}</td><td>${m.creatoDa}</td><td>${m.creatoIl}</td><td>${deleteActionCell('mat-'+m.codice, materialeInUso(m.codice) ? 'in uso, non eliminabile' : null)}</td></tr>`).join('')}
+          ${elenco.length === 0 ? `<tr><td colspan="${colonne.length+1}" style="text-align:center; color:#9a9a8f; padding:16px;">Nessun materiale in anagrafica. Usa MM01 per crearne uno.</td></tr>` :
+            elenco.map(m => `<tr><td>${m.codice}</td><td>${m.descrizione}</td><td>${m.tipo==='MP'?'Materia Prima':'Prodotto Finito'}</td><td>${m.um}</td><td>${getGiacenza(m.codice)}</td><td>${m.creatoDa}</td><td>${m.creatoIl}</td><td>${deleteActionCell('mat-'+m.codice, materialeInUso(m.codice) ? 'in uso, non eliminabile' : null)}</td></tr>`).join('')}
         </tbody>
       </table>
     </div>
   `;
+  document.querySelectorAll('.mm03-sort-th').forEach(th => {
+    th.addEventListener('click', () => {
+      if (sortMM03.campo === th.dataset.campo) sortMM03.asc = !sortMM03.asc;
+      else { sortMM03.campo = th.dataset.campo; sortMM03.asc = true; }
+      renderScreenContent();
+    });
+  });
   attachDeleteBaseListeners();
   document.querySelectorAll('.confirm-delete-yes').forEach(el => {
     el.addEventListener('click', () => withGuard(async () => {
@@ -4527,16 +4593,28 @@ function renderMM03(el) {
 
 // ============ XK01 ============
 function renderXK01(el) {
+  const tabs = [
+    { key: 'indirizzo', label: '① Indirizzo' },
+    { key: 'controllo', label: '② Dati di controllo' },
+  ];
   el.innerHTML = `
     <div class="actionrow"><button class="actionbtn" id="save-xk01">✔ Salva fornitore</button></div>
+    <div class="formwrap" style="padding-bottom:0;">
+      ${renderSapTabsHTML(tabs, xk01TabAttivo)}
+    </div>
     <div class="formwrap">
-      <div class="formgrid">
-        <label>Codice fornitore</label><input id="f-codice" value="${draftFornitore.codice}" placeholder="es. 10023">
-        <label>Ragione sociale</label><input id="f-rag" value="${draftFornitore.ragioneSociale}" placeholder="es. Acciai Toscana S.r.l.">
-        <label>Indirizzo</label><input id="f-indirizzo" value="${draftFornitore.indirizzo}" placeholder="es. Via dell'Acciaio 5">
-        <label>Città</label><input id="f-citta" value="${draftFornitore.citta}" placeholder="es. Livorno">
-        <label>Partita IVA</label><input id="f-piva" value="${draftFornitore.piva}" placeholder="es. IT01234567890">
-      </div>
+      ${xk01TabAttivo === 'indirizzo' ? `
+        <div class="formgrid">
+          <label>Codice fornitore</label><input id="f-codice" value="${draftFornitore.codice}" placeholder="es. 10023">
+          <label>Ragione sociale</label><input id="f-rag" value="${draftFornitore.ragioneSociale}" placeholder="es. Acciai Toscana S.r.l.">
+          <label>Indirizzo</label><input id="f-indirizzo" value="${draftFornitore.indirizzo}" placeholder="es. Via dell'Acciaio 5">
+          <label>Città</label><input id="f-citta" value="${draftFornitore.citta}" placeholder="es. Livorno">
+        </div>
+      ` : `
+        <div class="formgrid">
+          <label>Partita IVA</label><input id="f-piva" value="${draftFornitore.piva}" placeholder="es. IT01234567890">
+        </div>
+      `}
     </div>
     <div class="tablewrap">
       <table>
@@ -4545,6 +4623,7 @@ function renderXK01(el) {
       </table>
     </div>
   `;
+  attachSapTabsListeners(tab => { xk01TabAttivo = tab; renderScreenContent(); });
   attachDeleteBaseListeners();
   document.querySelectorAll('.confirm-delete-yes').forEach(el => {
     el.addEventListener('click', () => withGuard(async () => {
@@ -4557,7 +4636,9 @@ function renderXK01(el) {
     }));
   });
   ['f-codice','f-rag','f-indirizzo','f-citta','f-piva'].forEach(id => {
-    document.getElementById(id).addEventListener('input', (e) => {
+    const campo = document.getElementById(id);
+    if (!campo) return;
+    campo.addEventListener('input', (e) => {
       const map = {'f-codice':'codice','f-rag':'ragioneSociale','f-indirizzo':'indirizzo','f-citta':'citta','f-piva':'piva'};
       draftFornitore[map[id]] = e.target.value;
     });
@@ -4573,6 +4654,7 @@ function renderXK01(el) {
     await aggiungiRecord('fornitori', rec);
     fornitori.push(rec);
     draftFornitore = { codice:"", ragioneSociale:"", indirizzo:"", citta:"", piva:"" };
+    xk01TabAttivo = 'indirizzo';
     setStatus(`Fornitore ${rec.codice} creato con successo.`);
     renderMain();
   }));
@@ -4580,16 +4662,28 @@ function renderXK01(el) {
 
 // ============ XD01 ============
 function renderXD01(el) {
+  const tabs = [
+    { key: 'indirizzo', label: '① Indirizzo' },
+    { key: 'controllo', label: '② Dati di controllo' },
+  ];
   el.innerHTML = `
     <div class="actionrow"><button class="actionbtn" id="save-xd01">✔ Salva cliente</button></div>
+    <div class="formwrap" style="padding-bottom:0;">
+      ${renderSapTabsHTML(tabs, xd01TabAttivo)}
+    </div>
     <div class="formwrap">
-      <div class="formgrid">
-        <label>Codice cliente</label><input id="f-codice" value="${draftCliente.codice}" placeholder="es. 20044">
-        <label>Ragione sociale</label><input id="f-rag" value="${draftCliente.ragioneSociale}" placeholder="es. Officine del Tirreno">
-        <label>Indirizzo</label><input id="f-indirizzo" value="${draftCliente.indirizzo}" placeholder="es. Via delle Officine 12">
-        <label>Città</label><input id="f-citta" value="${draftCliente.citta}" placeholder="es. Piombino">
-        <label>Partita IVA</label><input id="f-piva" value="${draftCliente.piva}" placeholder="es. IT01234567890">
-      </div>
+      ${xd01TabAttivo === 'indirizzo' ? `
+        <div class="formgrid">
+          <label>Codice cliente</label><input id="f-codice" value="${draftCliente.codice}" placeholder="es. 20044">
+          <label>Ragione sociale</label><input id="f-rag" value="${draftCliente.ragioneSociale}" placeholder="es. Officine del Tirreno">
+          <label>Indirizzo</label><input id="f-indirizzo" value="${draftCliente.indirizzo}" placeholder="es. Via delle Officine 12">
+          <label>Città</label><input id="f-citta" value="${draftCliente.citta}" placeholder="es. Piombino">
+        </div>
+      ` : `
+        <div class="formgrid">
+          <label>Partita IVA</label><input id="f-piva" value="${draftCliente.piva}" placeholder="es. IT01234567890">
+        </div>
+      `}
     </div>
     <div class="tablewrap">
       <table>
@@ -4598,6 +4692,7 @@ function renderXD01(el) {
       </table>
     </div>
   `;
+  attachSapTabsListeners(tab => { xd01TabAttivo = tab; renderScreenContent(); });
   attachDeleteBaseListeners();
   document.querySelectorAll('.confirm-delete-yes').forEach(el => {
     el.addEventListener('click', () => withGuard(async () => {
@@ -4610,7 +4705,9 @@ function renderXD01(el) {
     }));
   });
   ['f-codice','f-rag','f-indirizzo','f-citta','f-piva'].forEach(id => {
-    document.getElementById(id).addEventListener('input', (e) => {
+    const campo = document.getElementById(id);
+    if (!campo) return; // solo i campi della scheda attiva sono nel DOM
+    campo.addEventListener('input', (e) => {
       const map = {'f-codice':'codice','f-rag':'ragioneSociale','f-indirizzo':'indirizzo','f-citta':'citta','f-piva':'piva'};
       draftCliente[map[id]] = e.target.value;
     });
@@ -4626,6 +4723,7 @@ function renderXD01(el) {
     await aggiungiRecord('clienti', rec);
     clienti.push(rec);
     draftCliente = { codice:"", ragioneSociale:"", indirizzo:"", citta:"", piva:"" };
+    xd01TabAttivo = 'indirizzo';
     setStatus(`Cliente ${rec.codice} creato con successo.`);
     renderMain();
   }));
