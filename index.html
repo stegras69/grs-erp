@@ -272,7 +272,7 @@ async function _diagLeggiPersistente() {
 
 const CHIAVI_CORSO = ['materiali','fornitori','clienti','distinte','ordiniVendita','ordiniProduzione',
   'lineeProduzione','assegnazioni','richiesteAcquisto','ordiniAcquisto','fornitoriMateriale','consegne',
-  'locazioni','movimentazioni'];
+  'locazioni','movimentazioni','erroriMovimenti'];
 
 // Campo che identifica univocamente un record di ciascun tipo (serve per applicare le "patch" di stato)
 const CAMPO_CHIAVE = {
@@ -281,6 +281,7 @@ const CAMPO_CHIAVE = {
   richiesteAcquisto: 'numero', ordiniAcquisto: 'numero', consegne: 'numero',
   assegnazioni: (r) => r.prodotto + '::' + r.linea,
   fornitoriMateriale: (r) => r.materiale + '::' + r.fornitore,
+  erroriMovimenti: 'numero',
 };
 function chiaveDiRecord(key, record) {
   const cc = CAMPO_CHIAVE[key];
@@ -563,10 +564,26 @@ async function loadList(key, shared = true) {
 }
 
 // SCRITTURA (creazione): il nuovo record va SEMPRE E SOLO nel cassetto dell'utente corrente.
+// Legge un cassetto DAL SERVER (non dalla cache di sessione) subito prima di modificarlo: se lo stesso utente è
+// collegato da due schede/dispositivi, o un tool di manutenzione ha riscritto il cassetto, la cache locale è vecchia
+// e riscriverla per intero cancellerebbe in silenzio quanto scritto dall'altra sessione (es. conferme di spedizione
+// perse: l'ordine "ricompare" come aperto).
+async function leggiCassettoFresco(chiave) {
+  if (STORAGE_CONFIGURATO) {
+    try {
+      const res = await remoteStorage.get(chiave);
+      const v = res ? JSON.parse(res.value) : [];
+      const arr = Array.isArray(v) ? v : [];
+      if (_cacheCorso) _cacheCorso[chiave] = JSON.stringify(arr);
+      return arr;
+    } catch (e) { /* ripiego sulla lettura normale (con retry/cache) */ }
+  }
+  return await getRaw(chiave, true);
+}
 async function aggiungiRecord(key, record) {
   await registraPartecipante();
   const chiaveCassetto = corsoKey(key) + '::u::' + nomeShard();
-  const mio = await getRaw(chiaveCassetto, true);
+  const mio = await leggiCassettoFresco(chiaveCassetto);
   mio.push(record);
   await setRaw(chiaveCassetto, mio, true);
   return record;
@@ -580,7 +597,7 @@ async function aggiungiRecord(key, record) {
 async function applicaPatch(key, valoreChiave, campiDaAggiornare, opzioni = {}) {
   await registraPartecipante();
   const chiaveCassetto = corsoKey(key) + '::patch::' + nomeShard();
-  const mie = await getRaw(chiaveCassetto, true);
+  const mie = await leggiCassettoFresco(chiaveCassetto);
   mie.push({ _target: valoreChiave, _t: Date.now(), _da: currentUser, campi: campiDaAggiornare, _arrayField: opzioni.arrayField || null, _arrayIndex: opzioni.arrayIndex !== undefined ? opzioni.arrayIndex : null });
   return await setRaw(chiaveCassetto, mie, true);
 }
@@ -650,6 +667,7 @@ let richiesteAcquisto = []; // [{numero, materiale, quantita, dataRichiesta, sta
 let ordiniAcquisto = []; // [{numero, fornitore, righe:[{materiale, quantita, prezzoUnitario, dataConsegna, richiestaRif, ricevuto}], stato, creatoDa, creatoIl}]
 let consegne = []; // [{numero(DDT), ordineVendita, cliente, riferimentoCliente, righe:[{prodotto, quantita}], creatoDa, creatoIl}]
 let locazioni = []; // [{codice, descrizione, fissa:boolean, creatoDa, creatoIl}]
+let erroriMovimenti = []; // COGI: movimenti merci di produzione non registrati (giacenza insufficiente)
 let movimentazioni = []; // [{numero, materiale, locazioneDa, locazioneA, quantita, causale, data, creatoDa, creatoIl}]
 
 const LOCAZIONI_FISSE = [
@@ -708,9 +726,50 @@ function fornitoreInUso(codice) {
   return ordiniAcquisto.some(o => o.fornitore === codice);
 }
 
+// ---- Parametri MRP dell'anagrafica materiale (stile SAP: vista MRP 1/2). Vuoto o 0 = parametro non attivo. ----
+const MRP_TIPI = [['PD','PD - MRP (pianificazione deterministica)'],['VB','VB - Punto di riordino manuale'],['ND','ND - Nessuna pianificazione']];
+const MRP_POLITICHE = [['EX','EX - Lotto per lotto'],['FX','FX - Quantità fissa (lotto fisso)'],['HB','HB - Riempimento fino al livello massimo'],['TB','TB - Lotto giornaliero'],['WB','WB - Lotto settimanale'],['MB','MB - Lotto mensile']];
+const MRP_CAMPI_MM = [
+  { k:'gruppoProdotti', label:'Gruppo prodotti', tipo:'testo', def:'' },
+  { k:'tipoMRP', label:'Tipo MRP', tipo:'select', opzioni: MRP_TIPI, def:'PD' },
+  { k:'politicaLotto', label:'Politica di lotto', tipo:'select', opzioni: MRP_POLITICHE, def:'EX' },
+  { k:'lottoFisso', label:'Lotto fisso (per FX)', def:'0' },
+  { k:'lottoMin', label:'Lotto minimo', def:'0' },
+  { k:'lottoMax', label:'Lotto massimo', def:'0' },
+  { k:'livelloMax', label:'Livello max scorta (per HB)', def:'0' },
+  { k:'arrotondamento', label:'Valore di arrotondamento (multiplo)', def:'0' },
+  { k:'tempoConsegna', label:'Tempo di consegna previsto (gg di calendario)', def:'0' },
+  { k:'tempoEntrataMerci', label:'Tempo lavorazione entrata merci (gg lavorativi)', def:'0' },
+  { k:'giacNeg', label:'Giacenza negativa ammessa (ubicazione)', tipo:'select', opzioni:[['NO','NO - non ammessa'],['SI','SI - ammessa']], def:'NO' },
+];
+function draftMRPDefault() { const o = {}; MRP_CAMPI_MM.forEach(c => o[c.k] = c.def); return o; }
+function draftMRPDaMateriale(m) {
+  const o = {};
+  MRP_CAMPI_MM.forEach(c => { const v = m ? m[c.k] : undefined; o[c.k] = (v === undefined || v === null || v === '') ? c.def : String(v); });
+  return o;
+}
+function valoriMRPDaDraft(draft) {
+  const o = {};
+  MRP_CAMPI_MM.forEach(c => { o[c.k] = c.tipo === 'select' ? (draft[c.k] || c.def) : c.tipo === 'testo' ? String(draft[c.k] || '').trim().toUpperCase() : (Number(draft[c.k]) || 0); });
+  return o;
+}
+function campiMRPHTML(prefisso, draft) {
+  return MRP_CAMPI_MM.map(c => c.tipo === 'testo'
+    ? `<label>${c.label}</label><div><input id="${prefisso}-${c.k}" list="${prefisso}-${c.k}-dl" value="${String(draft[c.k] || '').replace(/"/g, '&quot;')}" placeholder="es. DIVANI (testo libero)" style="text-transform:uppercase;"><datalist id="${prefisso}-${c.k}-dl">${[...new Set(materiali.map(m => m.gruppoProdotti).filter(Boolean))].sort().map(g => `<option value="${g}">`).join('')}</datalist></div>`
+    : c.tipo === 'select'
+    ? `<label>${c.label}</label><select id="${prefisso}-${c.k}">${c.opzioni.map(o => `<option value="${o[0]}" ${draft[c.k] === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>`
+    : `<label>${c.label}</label><input id="${prefisso}-${c.k}" type="number" min="0" value="${draft[c.k]}">`).join('');
+}
+function collegaCampiMRP(prefisso, draft) {
+  MRP_CAMPI_MM.forEach(c => {
+    const el = document.getElementById(`${prefisso}-${c.k}`);
+    if (el) el.addEventListener(c.tipo === 'select' ? 'change' : 'input', e => { draft[c.k] = e.target.value; });
+  });
+}
+
 // form drafts
-let draftMateriale = { codice:"", descrizione:"", tipo:"MP", um:"PZ", giacenza:"0", scortaMinima:"0", scortaSicurezza:"0", puntoRiordino:"0" };
-let draftMM02 = { codiceSelezionato:"", scortaMinima:"0", scortaSicurezza:"0", puntoRiordino:"0" };
+let draftMateriale = { codice:"", descrizione:"", tipo:"MP", um:"PZ", giacenza:"0", scortaMinima:"0", scortaSicurezza:"0", puntoRiordino:"0", ...draftMRPDefault() };
+let draftMM02 = { codiceSelezionato:"", scortaMinima:"0", scortaSicurezza:"0", puntoRiordino:"0", ...draftMRPDefault() };
 let draftFornitore = { codice:"", ragioneSociale:"", indirizzo:"", citta:"", piva:"" };
 let draftCliente = { codice:"", ragioneSociale:"", indirizzo:"", citta:"", piva:"" };
 let draftDistinta = { prodotto:"", componenti:[{codice:"",qta:"1"}] };
@@ -719,6 +778,7 @@ let draftOV = { cliente:"", riferimentoCliente:"", righe:[{prodotto:"", quantita
 let draftCO01 = { prodotto:"", quantita:"1", dataPianificata:"" };
 let mf50Quantita = {}; // deprecato (usato dalla vecchia UI a riga singola, non più renderizzata)
 let mf50Data = {}; // deprecato
+let mf50Sel = { applicata:false, linee:[], gruppi:[], materiale:'', soloFabbisogno:false, settimane:8, ordina:'linea' };
 let mf50CellDraft = {}; // { "codice::linea::indiceSettimana": valoreInserito } — bozza della matrice settimanale MF50
 let draftLinea = { codice:"", descrizione:"", capacitaMax:"" };
 let editandoLinea = null; // codice della linea in modifica, o null se si sta creando una nuova linea
@@ -730,8 +790,8 @@ let draftMov = { materiale:"", locazioneDa:"", locazioneA:"", quantita:"1", caus
 let filtroMov = { causale:"", tipo:"", controparte:"", materiale:"", dataDa:"", dataA:"" };
 let draftPR = { materiale:"", quantita:"1", dataRichiesta:"" };
 let draftPO = { fornitore:"", selezionate:{} }; // selezionate: { numeroRichiesta: {prezzo, dataConsegna} }
-let mdCellDraft = {}; // { "materiale::indiceSettimana": valoreInserito } — bozza della matrice MD01
-let draftMD03 = { materiale: "" };
+let draftMD02 = { materiale: "", modalita: "1", mostra: true, risultato: null };
+let draftMD03 = { materiale: "", modalita: "1", mostra: true, risultato: null };
 let draftMD04 = { materiale: "" };
 
 const MENU = [
@@ -762,6 +822,7 @@ const MENU = [
       ]},
       { label: "Pianificazione Fabbisogni (MRP)", active: true, children: [
         { label: "MD01 - Esegui MRP (fabbisogno materiali)", active: true, screen:"MD01" },
+        { label: "MD02 - Esegui MRP (multilivello, singolo prodotto)", active: true, screen:"MD02" },
         { label: "MD03 - Esegui MRP (singolo materiale)", active: true, screen:"MD03" },
         { label: "MD04 - Elenco disponibilità/fabbisogni", active: true, screen:"MD04" },
         { label: "MF50 - Pianificazione produzione", active: true, screen:"MF50" },
@@ -775,7 +836,11 @@ const MENU = [
         { label: "MMBE - Stock disponibile", active: true, screen:"MMBE" },
         { label: "LS24 - Giacenza per ubicazione", active: true, screen:"LS24" },
         { label: "LS01N - Ubicazioni di magazzino", active: true, screen:"LS01N" },
+        { label: "MB1A - Prelievo / uscita merci", active: true, screen:"MB1A" },
         { label: "MB1B - Trasferimento merce tra locazioni", active: true, screen:"MB1B" },
+        { label: "MB1C - Altri ingressi merci", active: true, screen:"MB1C" },
+        { label: "MBST - Storno documento materiale", active: true, screen:"MBST" },
+        { label: "ZMB01 - Anomalie giacenze negative", active: true, screen:"ZMB01" },
         { label: "MB51 - Elenco movimentazioni materiale", active: true, screen:"MB51" },
       ]},
     ]},
@@ -783,6 +848,8 @@ const MENU = [
       { label: "Dati Base", active: true, children: [
         { label: "CS01 - Crea distinta base", active: true, screen:"CS01" },
         { label: "CS02 - Modifica distinta base", active: true, screen:"CS02" },
+        { label: "CS03 - Visualizza distinta base (anche multilivello)", active: true, screen:"CS03" },
+        { label: "CS15 - Lista di impiego materiale", active: true, screen:"CS15" },
         { label: "CR01 - Crea linea di produzione", active: true, screen:"CR01" },
         { label: "C223 - Versione di produzione (assegna prodotto a linea)", active: true, screen:"C223" },
       ]},
@@ -790,6 +857,7 @@ const MENU = [
         { label: "CO01 - Crea ordine di produzione", active: true, screen:"CO01" },
         { label: "COOIS - Elenco ordini di produzione", active: true, screen:"COOIS" },
         { label: "CO15 - Conferma/evadi ordine di produzione", active: true, screen:"CO15" },
+        { label: "COGI - Movimenti merci errati (produzione)", active: true, screen:"COGI" },
         { label: "ZMR01 - Fabbisogno materiale da trasferire in officina", active: true, screen:"ZMR01" },
       ]},
     ]},
@@ -1059,6 +1127,28 @@ async function eseguiPuliziaCorso(analisi) {
 
 let adminPulizia = { corso: '', analisi: null, inCorso: false };
 
+// ---- Interruttore generale "giacenza negativa consentita" (per corso, gestito dal formatore) ----
+// Salvato in 'corso_X::impostazioni' e letto SEMPRE fresco dalla rete al momento della registrazione
+// (non dalla cache di sessione), così il cambio fatto dal formatore vale subito per tutti i corsisti.
+async function leggiImpostazioniCorso(codiceCorso) {
+  try {
+    if (!STORAGE_CONFIGURATO) return _localFallback['corso_' + codiceCorso + '::impostazioni'] || {};
+    const res = await remoteStorage.get('corso_' + codiceCorso + '::impostazioni');
+    const v = res ? JSON.parse(res.value) : null;
+    return (v && !Array.isArray(v)) ? v : {};
+  } catch (e) { return {}; }
+}
+// Come in SAP servono DUE condizioni: interruttore generale del formatore (livello "stabilimento")
+// E flag sul singolo materiale (MM02, campo "Giacenza negativa ammessa").
+async function negativoAmmesso(codiceMateriale) {
+  const m = materiali.find(x => x.codice === codiceMateriale);
+  if (!m || m.giacNeg !== 'SI') return false;
+  return await giacenzaNegativaConsentita();
+}
+async function giacenzaNegativaConsentita() {
+  return !!(await leggiImpostazioniCorso(currentCorso)).giacenzaNegativa;
+}
+
 async function renderAdminPanel() {
   const app = document.getElementById('app');
   app.innerHTML = `<div class="login-overlay"><div class="login-box"><p style="text-align:center; color:#8a8a80;">Caricamento…</p></div></div>`;
@@ -1066,6 +1156,8 @@ async function renderAdminPanel() {
   const logPersistente = await _diagLeggiPersistente();
   const logPersistenteRecenti = logPersistente.slice(-15).reverse();
   const dispositiviBannati = await elencoDispositiviBannati();
+  const impostazioniCorsi = {};
+  for (const c of corsiRegistrati) impostazioniCorsi[c.codice] = await leggiImpostazioniCorso(c.codice);
 
   app.innerHTML = `
     <div class="login-overlay">
@@ -1086,6 +1178,7 @@ async function renderAdminPanel() {
               <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; border-bottom:1px solid #eee; font-size:11px;">
                 <span>${c.codice}</span>
                 <span>
+                  <span class="print-btn admin-giac-neg" data-corso="${c.codice}" style="margin-right:10px; color:${impostazioniCorsi[c.codice].giacenzaNegativa ? '#a83232' : '#1a6b2e'};" title="Interruttore generale (livello stabilimento): vale solo per i materiali con flag 'Giacenza negativa ammessa' in MM02">giac. negativa: ${impostazioniCorsi[c.codice].giacenzaNegativa ? 'CONSENTITA' : 'bloccata'}</span>
                   <span class="print-btn admin-sel-corso" data-corso="${c.codice}" data-azione="backup" style="margin-right:10px;">📥 backup</span>
                   <span class="print-btn admin-sel-corso" data-corso="${c.codice}" data-azione="elimina" style="color:#a83232;">🗑 elimina</span>
                 </span>
@@ -1167,6 +1260,16 @@ async function renderAdminPanel() {
     </div>
   `;
   document.getElementById('admin-back2').addEventListener('click', () => { adminMsg=''; adminConfirmDelete=false; adminCorsoValue=''; adminNuovoCorsoValue=''; renderCorsoSelect(); });
+  document.querySelectorAll('.admin-giac-neg').forEach(el => {
+    el.addEventListener('click', async () => {
+      const cod = el.dataset.corso;
+      const imp = { ...(impostazioniCorsi[cod] || {}) };
+      imp.giacenzaNegativa = !imp.giacenzaNegativa;
+      await setRaw('corso_' + cod + '::impostazioni', imp);
+      adminMsg = `Corso ${cod}: giacenza negativa ${imp.giacenzaNegativa ? 'CONSENTITA' : 'bloccata'}.`;
+      renderAdminPanel();
+    });
+  });
   document.querySelectorAll('.sblocca-dispositivo-btn').forEach(el => {
     el.addEventListener('click', async () => {
       await sbloccaDispositivo(el.dataset.id);
@@ -1375,6 +1478,7 @@ function renderMain() {
     VA01: "VA01: Crea ordine di vendita",
     MF50: "MF50: Pianificazione produzione",
     MD01: "MD01: Esegui MRP",
+    MD02: "MD02: Esegui MRP (multilivello, singolo prodotto)",
     MD03: "MD03: Esegui MRP (singolo materiale)",
     MD04: "MD04: Elenco disponibilità/fabbisogni",
     CO01: "CO01: Crea ordine di produzione",
@@ -1390,7 +1494,14 @@ function renderMain() {
     LS24: "LS24: Giacenza per ubicazione",
     VL01N: "VL01N: Crea consegna",
     LS01N: "LS01N: Ubicazioni di magazzino",
+    CS03: "CS03: Visualizza distinta base",
+    CS15: "CS15: Lista di impiego materiale",
+    COGI: "COGI: Movimenti merci errati (produzione)",
+    ZMB01: "ZMB01: Anomalie giacenze negative",
+    MB1A: "MB1A: Prelievo / uscita merci",
     MB1B: "MB1B: Trasferimento merce tra locazioni",
+    MB1C: "MB1C: Altri ingressi merci",
+    MBST: "MBST: Storno documento materiale",
     MB51: "MB51: Elenco movimentazioni materiale",
   };
 
@@ -1474,6 +1585,7 @@ function renderMain() {
     consegne = await loadList('consegne');
     locazioni = await loadList('locazioni');
     movimentazioni = await loadList('movimentazioni');
+    erroriMovimenti = await loadList('erroriMovimenti');
     preferiti = await loadList('preferiti', false);
     const { out } = normalizzaOrdiniVendita(ordiniVendita);
     ordiniVendita = out;
@@ -1515,6 +1627,7 @@ function renderScreenContent() {
   else if (screen === 'VA01') renderVA01(el);
   else if (screen === 'MF50') renderMF50(el);
   else if (screen === 'MD01') renderMD01(el);
+  else if (screen === 'MD02') renderMD02(el);
   else if (screen === 'MD03') renderMD03(el);
   else if (screen === 'MD04') renderMD04(el);
   else if (screen === 'CO01') renderCO01(el);
@@ -1530,7 +1643,12 @@ function renderScreenContent() {
   else if (screen === 'LS24') renderLS24(el);
   else if (screen === 'VL01N') renderVL01N(el);
   else if (screen === 'LS01N') renderLocazioni(el);
-  else if (screen === 'MB1B') renderMovStock(el);
+  else if (screen === 'MB1A' || screen === 'MB1B' || screen === 'MB1C') renderMovimentoMateriale(el, screen);
+  else if (screen === 'MBST') renderMBST(el);
+  else if (screen === 'COGI') renderCOGI(el);
+  else if (screen === 'CS03') renderCS03(el);
+  else if (screen === 'CS15') renderCS15(el);
+  else if (screen === 'ZMB01') renderZMB01(el);
   else if (screen === 'MB51') renderMovList(el);
   else if (screen === 'ZMR01') renderZMR01(el);
   applicaLayoutSticky();
@@ -1644,6 +1762,8 @@ function _elencoPerPrefisso(prefisso) {
   if (prefisso === 'RA') return richiesteAcquisto;
   if (prefisso === 'OP') return ordiniProduzione;
   if (prefisso === 'DDT') return consegne;
+  if (prefisso === 'COGI') return erroriMovimenti;
+  if (prefisso === 'DM') return [...new Set(movimentazioni.map(m => m.documento).filter(Boolean))].map(n => ({ numero: n }));
   return [];
 }
 // Genera il numero successivo per un tipo di documento (OV, OA, RA, OP, DDT) in modo
@@ -1679,6 +1799,48 @@ async function prossimoNumero(prefisso) {
 }
 function getBOM(codiceProdotto) {
   return distinte.find(d => d.prodotto === codiceProdotto);
+}
+// ---- Distinte multilivello (semilavorati): un componente di tipo PF può avere a sua volta una distinta.
+// Si usa solo se serve: una distinta con soli componenti MP resta a un livello, come prima.
+function componenteDistintaOpzioni(padre) {
+  return materiali.filter(m => (m.tipo === 'MP' || m.tipo === 'PF') && m.codice !== padre)
+    .map(m => ({ value: m.codice, label: materialeLabel(m.codice) + (m.tipo === 'PF' ? '  [semilavorato]' : '') }));
+}
+// true se aggiungere questi componenti al padre crea un ciclo (il padre compare tra i propri discendenti)
+function distintaCreaCiclo(padre, componenti) {
+  const visti = new Set();
+  const scendi = (cod) => {
+    if (cod === padre) return true;
+    if (visti.has(cod)) return false;
+    visti.add(cod);
+    const b = getBOM(cod);
+    return b ? b.componenti.some(c => scendi(c.codice)) : false;
+  };
+  return componenti.some(c => scendi(c.codice));
+}
+// Esplosione verso il basso: [{livello, codice, qtaUnit (per 1 pezzo del padre diretto), qtaTot (per qta pezzi del prodotto in cima), via}]
+function esplodiDistinta(codice, qta, livello = 1, percorso = [codice]) {
+  const b = getBOM(codice); const out = [];
+  if (!b) return out;
+  b.componenti.forEach(c => {
+    if (percorso.includes(c.codice)) return; // protezione da cicli in dati storici
+    const tot = Number(c.qta) * qta;
+    out.push({ livello, codice: c.codice, padre: codice, qtaUnit: Number(c.qta), qtaTot: tot });
+    out.push(...esplodiDistinta(c.codice, tot, livello + 1, [...percorso, c.codice]));
+  });
+  return out;
+}
+// Lista di impiego (verso l'alto): dove è usato un materiale. molt = quantità del materiale per 1 pezzo del prodotto trovato.
+function impiegoMateriale(codice, multilivello, molt = 1, livello = 1, percorso = [codice]) {
+  const out = [];
+  distinte.forEach(d => {
+    const c = d.componenti.find(x => x.codice === codice);
+    if (!c || percorso.includes(d.prodotto)) return;
+    const m = molt * Number(c.qta);
+    out.push({ livello, prodotto: d.prodotto, figlio: codice, qtaDiretta: Number(c.qta), qtaPerPezzo: m, percorso: [...percorso, d.prodotto] });
+    if (multilivello) out.push(...impiegoMateriale(d.prodotto, true, m, livello + 1, [...percorso, d.prodotto]));
+  });
+  return out;
 }
 // ============ SEMAFORO DI STATO (stile SAP) ============
 // verde = completato/ok, giallo = in corso/aperto, rosso = bloccato/critico/scaduto
@@ -2022,8 +2184,20 @@ function renderVA01(el) {
     const righeValide = draftOV.righe.filter(r => r.prodotto && Number(r.quantita) > 0 && r.dataRichiesta);
     if (righeValide.length === 0) { setStatus('Aggiungi almeno una riga valida (prodotto, quantità > 0, data).', true); return; }
 
+    // Anti-duplicati: stessa posizione (stesso prodotto e stessa data) due volte nello stesso ordine → si unisce la quantità.
+    const visteVA = new Map();
+    for (let i = 0; i < righeValide.length; i++) {
+      const k = righeValide[i].prodotto + '|' + righeValide[i].dataRichiesta;
+      if (visteVA.has(k)) { setStatus(`Riga doppia: le posizioni ${visteVA.get(k) + 1} e ${i + 1} hanno lo stesso prodotto (${righeValide[i].prodotto}) e la stessa data. Unisci le quantità in una sola riga. Ordine non salvato.`, true); return; }
+      visteVA.set(k, i);
+    }
     const fresca = await loadList('ordiniVendita');
     const { out } = normalizzaOrdiniVendita(fresca);
+    // Anti-duplicati: un ordine ancora aperto con lo stesso cliente, riferimento e identiche righe esiste già.
+    const firma = (cli, rif, righe) => cli + '#' + (rif || '') + '#' + righe.map(r => `${r.prodotto}|${Number(r.quantita)}|${r.dataRichiesta}`).sort().join(';');
+    const firmaNuova = firma(draftOV.cliente, draftOV.riferimentoCliente, righeValide);
+    const gemello = out.find(o => o.stato !== 'evaso' && firma(o.cliente, o.riferimentoCliente, o.righe || []) === firmaNuova);
+    if (gemello) { setStatus(`Esiste già l'ordine ${gemello.numero} con lo stesso cliente, riferimento e le stesse righe: ordine non salvato per evitare un duplicato. Se è davvero un nuovo ordine, cambia il riferimento cliente.`, true); return; }
     const rec = {
       numero: await prossimoNumero('OV'), cliente: draftOV.cliente, riferimentoCliente: draftOV.riferimentoCliente || '', stato: 'aperto',
       righe: righeValide.map(r => ({ prodotto: r.prodotto, quantita: Number(r.quantita), dataRichiesta: r.dataRichiesta, consegnato: 0 })),
@@ -2039,13 +2213,23 @@ function renderVA01(el) {
 }
 
 // ============ MF50 ============
+// Fabbisogno dipendente: un semilavorato (PF usato come componente) è richiesto dagli ordini di produzione aperti dei padri.
+function domandaDipendente(codice) {
+  const out = [];
+  ordiniProduzione.forEach(o => {
+    if (o.stato !== 'aperto' || o.prodotto === codice) return;
+    (o.componenti || []).forEach(c => { if (c.codice === codice) out.push({ data: o.dataPianificata || oggiISO(), qta: Number(c.qtaTotale) || 0 }); });
+  });
+  return out;
+}
 function demandForProduct(codice) {
   let totale = 0;
   let dataMinima = null;
+  domandaDipendente(codice).forEach(d => { totale += d.qta; if (!dataMinima || d.data < dataMinima) dataMinima = d.data; });
   ordiniVendita.filter(o => o.stato === 'aperto').forEach(o => {
     o.righe.forEach(r => {
       if (r.prodotto === codice) {
-        totale += r.quantita;
+        totale += Math.max(0, r.quantita - (r.consegnato || 0));
         if (!dataMinima || r.dataRichiesta < dataMinima) dataMinima = r.dataRichiesta;
       }
     });
@@ -2154,7 +2338,7 @@ function bucketIndexForDate(dateStr, buckets) {
 // che parte dal lunedì della settimana corrente e mostra ogni giorno passato/futuro separatamente):
 // qui il passato va compresso in un'unica colonna aggregata, come richiesto per il piano di
 // produzione (il dettaglio giorno-per-giorno del passato non serve più una volta trascorso).
-function generateBucketsMF50(nSettimaneDopo = 8) {
+function generateBucketsMF50() {
   const buckets = [];
   const oggi = new Date(); oggi.setHours(0,0,0,0);
   const ieri = new Date(oggi); ieri.setDate(ieri.getDate() - 1);
@@ -2177,13 +2361,9 @@ function generateBucketsMF50(nSettimaneDopo = 8) {
     buckets.push({ label: nomeGiorno+' '+fmtGG_MM(d), startISO: iso, endISO: iso, speciale: isWeekendOFestivo(d), oggi: iso === isoDate(oggi), creaDataISO: iso });
     cursorGiorno.setDate(cursorGiorno.getDate() + 1);
   }
-  // Settimanale dopo, a partire dal lunedì della 4a settimana.
-  const inizioSettimanali = new Date(lunediSettimanaCorrente); inizioSettimanali.setDate(inizioSettimanali.getDate() + 21);
-  for (let i = 0; i < nSettimaneDopo; i++) {
-    const s = new Date(inizioSettimanali); s.setDate(s.getDate() + i*7);
-    const e = new Date(s); e.setDate(e.getDate() + 6);
-    buckets.push({ label: `S${weekNumber(s)} (${fmtGG_MM(s)})`, startISO: isoDate(s), endISO: isoDate(e), speciale: false, oggi: false, creaDataISO: isoDate(s) });
-  }
+  // Dopo i 3 settimane giornaliere: UNA SOLA colonna "Oltre" che raccoglie tutto da lunedì della 4a settimana in poi.
+  const inizioOltre = new Date(lunediSettimanaCorrente); inizioOltre.setDate(inizioOltre.getDate() + 21);
+  buckets.push({ label: `Oltre (da ${fmtGG_MM(inizioOltre)})`, startISO: isoDate(inizioOltre), endISO: '9999-12-31', speciale: false, oggi: false, oltre: true, creaDataISO: isoDate(inizioOltre) });
   return buckets;
 }
 
@@ -2191,7 +2371,57 @@ function mf50Key(codice, linea) {
   return codice + '::' + (linea || '_');
 }
 
+// Schermata di selezione iniziale (stile SAP): scegli linee, gruppi prodotti, materiale, orizzonte e ordinamento,
+// poi "Esegui" mostra la tabella di pianificazione solo per quella selezione. Selezione vuota = tutto.
+const MF50_NESSUNA_LINEA = '(nessuna linea)';
+const MF50_SENZA_GRUPPO = '(senza gruppo)';
+function renderMF50Selezione(el) {
+  const pf = materiali.filter(m => m.tipo === 'PF');
+  const gruppi = [...new Set(pf.map(m => m.gruppoProdotti || MF50_SENZA_GRUPPO))].sort();
+  const lineeOpz = [...new Set(lineeProduzione.map(l => l.codice))];
+  const chk = (cls, v, sel) => `<label style="display:inline-block;margin:2px 14px 2px 0;font-size:11.5px;"><input type="checkbox" class="${cls}" value="${v}" ${sel.includes(v) ? 'checked' : ''}> ${v}</label>`;
+  el.innerHTML = `
+    <div class="actionrow"><button class="actionbtn" id="mf50-esegui">▶ Esegui</button><button class="actionbtn" id="mf50-azzera">✕ Azzera selezione</button></div>
+    <div class="formwrap">
+      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Seleziona cosa pianificare. Lasciando un campo vuoto vale "tutti". La tabella mostrerà solo la selezione; le quantità già digitate non vanno perse cambiando selezione.</p>
+      <div class="formgrid">
+        <label>Linee di produzione</label>
+        <div>${lineeOpz.map(l => chk('mf50-sel-linea', l, mf50Sel.linee)).join('')}${chk('mf50-sel-linea', MF50_NESSUNA_LINEA, mf50Sel.linee)}</div>
+        <label>Gruppi prodotti</label>
+        <div>${gruppi.length ? gruppi.map(g => chk('mf50-sel-gruppo', g, mf50Sel.gruppi)).join('') : '<span style="font-size:11px;color:#9a9a8f;">Nessun gruppo definito: assegnalo ai prodotti in MM01/MM02 (campo "Gruppo prodotti").</span>'}</div>
+        <label>Materiale</label>
+        <div>${campoF4HTML('mf50-sel-mat', mf50Sel.materiale ? materialeLabel(mf50Sel.materiale) : '', '-- tutti (F4) --')}${mf50Sel.materiale ? ' <span class="rowaction" id="mf50-sel-mat-x" style="cursor:pointer;">✕</span>' : ''}</div>
+        <label>Solo con fabbisogno</label>
+        <input type="checkbox" id="mf50-sel-fabb" ${mf50Sel.soloFabbisogno ? 'checked' : ''} style="width:auto;">
+        <label>Ordinamento</label>
+        <select id="mf50-sel-ord">
+          <option value="linea" ${mf50Sel.ordina === 'linea' ? 'selected' : ''}>per linea, poi codice</option>
+          <option value="codice" ${mf50Sel.ordina === 'codice' ? 'selected' : ''}>per codice</option>
+          <option value="fabbisogno" ${mf50Sel.ordina === 'fabbisogno' ? 'selected' : ''}>per fabbisogno (dal maggiore)</option>
+        </select>
+      </div>
+    </div>`;
+  const leggi = () => {
+    mf50Sel.linee = [...el.querySelectorAll('.mf50-sel-linea:checked')].map(x => x.value);
+    mf50Sel.gruppi = [...el.querySelectorAll('.mf50-sel-gruppo:checked')].map(x => x.value);
+    mf50Sel.soloFabbisogno = document.getElementById('mf50-sel-fabb').checked;
+    mf50Sel.ordina = document.getElementById('mf50-sel-ord').value;
+  };
+  collegaF4('mf50-sel-mat', 'Cerca materiale', pf.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => { leggi(); mf50Sel.materiale = valore; renderScreenContent(); });
+  const x = document.getElementById('mf50-sel-mat-x'); if (x) x.addEventListener('click', () => { leggi(); mf50Sel.materiale = ''; renderScreenContent(); });
+  document.getElementById('mf50-esegui').addEventListener('click', () => { leggi(); mf50Sel.applicata = true; renderScreenContent(); });
+  document.getElementById('mf50-azzera').addEventListener('click', () => { mf50Sel = { applicata:false, linee:[], gruppi:[], materiale:'', soloFabbisogno:false, settimane:8, ordina:'linea' }; renderScreenContent(); });
+}
+// giorni lavorativi in un periodo (per la capacità settimanale della linea)
+function giorniLavInBucket(b) {
+  if (b.arretrato || b.oltre) return 0; // arretrato e colonna "Oltre" non hanno una capacità giornaliera confrontabile
+  let n = 0; const d = new Date(b.startISO + 'T00:00:00'); const fine = new Date(b.endISO + 'T00:00:00');
+  while (d <= fine) { if (!isWeekendOFestivo(d)) n++; d.setDate(d.getDate() + 1); }
+  return n;
+}
+
 function renderMF50(el) {
+  if (!mf50Sel.applicata) { renderMF50Selezione(el); return; }
   const prodottiFiniti = materiali.filter(m => m.tipo === 'PF');
   const buckets = generateBucketsMF50();
 
@@ -2203,8 +2433,16 @@ function renderMF50(el) {
     const fabbisogno = Math.max(0, totale - giacenzaTeorica);
     const hasBOM = !!getBOM(p.codice);
     const linee = assegnazioni.filter(a => a.prodotto === p.codice).map(a => a.linea);
-    return { codice: p.codice, descrizione: p.descrizione, richiesto: totale, dataMinima, giacenza, pianificatoAperto, giacenzaTeorica, fabbisogno, hasBOM, linee };
+    return { codice: p.codice, descrizione: p.descrizione, gruppo: p.gruppoProdotti || '', richiesto: totale, dataMinima, giacenza, pianificatoAperto, giacenzaTeorica, fabbisogno, hasBOM, linee };
+  }).filter(r => {
+    if (mf50Sel.materiale && r.codice !== mf50Sel.materiale) return false;
+    if (mf50Sel.gruppi.length && !mf50Sel.gruppi.includes(r.gruppo || MF50_SENZA_GRUPPO)) return false;
+    if (mf50Sel.linee.length && !(r.linee.length ? r.linee : [MF50_NESSUNA_LINEA]).some(l => mf50Sel.linee.includes(l))) return false;
+    if (mf50Sel.soloFabbisogno && !(r.fabbisogno > 0)) return false;
+    return true;
   });
+  const prodottiVisibili = new Set(righeCalc.map(r => r.codice));
+  const lineaVisibile = (l) => !mf50Sel.linee.length || mf50Sel.linee.includes(l || MF50_NESSUNA_LINEA);
 
   // ---- Recap per linea: produzione totale pianificata, con più codici possibili sulla stessa linea ----
   function recapPerLineaHTML() {
@@ -2212,8 +2450,9 @@ function renderMF50(el) {
     // vecchi dati duplicati), evita di renderizzare più blocchi identici sovrapposti per la
     // stessa linea ("si ammucchiano").
     const lineeChiavi = [...new Set(lineeProduzione.map(l => l.codice))];
-    const haNonAssegnata = ordiniProduzione.some(o => o.stato === 'aperto' && !o.linea);
-    if (haNonAssegnata) lineeChiavi.push('(non assegnata)');
+    const haNonAssegnata = ordiniProduzione.some(o => o.stato === 'aperto' && !o.linea && prodottiVisibili.has(o.prodotto));
+    if (haNonAssegnata && lineaVisibile(null)) lineeChiavi.push('(non assegnata)');
+    for (let i = lineeChiavi.length - 1; i >= 0; i--) if (lineeChiavi[i] !== '(non assegnata)' && !lineaVisibile(lineeChiavi[i])) lineeChiavi.splice(i, 1);
     if (lineeChiavi.length === 0) {
       return `
         <div style="margin:0 10px 14px 10px;">
@@ -2223,7 +2462,7 @@ function renderMF50(el) {
     }
 
     const blocchi = lineeChiavi.map(lineaKey => {
-      const ordiniLinea = ordiniProduzione.filter(o => o.stato === 'aperto' && (o.linea || '(non assegnata)') === lineaKey);
+      const ordiniLinea = ordiniProduzione.filter(o => o.stato === 'aperto' && prodottiVisibili.has(o.prodotto) && (o.linea || '(non assegnata)') === lineaKey);
       const totalePerBucket = new Array(buckets.length).fill(0);
       const perCodice = {};
       ordiniLinea.forEach(o => {
@@ -2266,9 +2505,10 @@ function renderMF50(el) {
               <thead><tr><th style="min-width:150px;">${nomeLinea}${capacitaMax>0?` <span style="font-weight:400; font-size:9.5px; color:#5a6470;">(max ${capacitaMax}/g)</span>`:''}</th>${buckets.map(b => `<th style="text-align:center; min-width:48px; font-size:10px; ${b.arretrato?'background:#ffe0b3; color:#8a4a00; font-weight:700;':(b.speciale?'color:#a83232; background:#fbeaea;':'')} ${b.oggi?'text-decoration:underline;':''}">${b.label}</th>`).join('')}</tr></thead>
               <tbody>
                 <tr style="background:#f4f4ee; font-weight:600;"><td>Totale linea</td>${totalePerBucket.map((v,i) => {
-                  const sopraCapacita = capacitaMax>0 && v>capacitaMax && !buckets[i].label.startsWith('S');
+                  const sopraCapacita = capacitaMax>0 && v>capacitaMax && !buckets[i].oltre && !buckets[i].arretrato;
                   return `<td style="text-align:center; ${sopraCapacita?'color:#a83232; background:#fbeaea;':''}" ${sopraCapacita?`title="Supera la capacità massima della linea (${capacitaMax}/giorno)"`:''}>${v||0}${sopraCapacita?' ⚠':''}</td>`;
                 }).join('')}</tr>
+                ${capacitaMax > 0 ? `<tr><td style="font-size:10.5px; color:#5a6470;">Carico linea % (capacità ${capacitaMax}/giorno lav.)</td>${totalePerBucket.map((v, i) => { const cap = capacitaMax * giorniLavInBucket(buckets[i]); if (!cap) return '<td></td>'; const pc = Math.round(v / cap * 100); return `<td style="text-align:center; font-size:10.5px; font-weight:600; color:${pc > 100 ? '#a83232' : pc > 80 ? '#a86a1a' : '#1a6b2e'};">${v ? pc + '%' : ''}</td>`; }).join('')}</tr>` : ''}
                 ${righeCodici || '<tr><td colspan="'+(buckets.length+1)+'" style="text-align:center;color:#9a9a8f;font-size:10.5px;padding:4px;">Nessun ordine pianificato su questa linea.</td></tr>'}
               </tbody>
             </table>
@@ -2278,7 +2518,7 @@ function renderMF50(el) {
 
     return `
       <div style="margin:0 10px 14px 10px;">
-        <div style="background:#e5e0cc; border:1px solid #c8c2a8; padding:5px 8px; font-weight:600; font-size:11.5px;">📊 Produzione pianificata per linea (ordini aperti, per giorno/settimana)</div>
+        <div style="background:#e5e0cc; border:1px solid #c8c2a8; padding:5px 8px; font-weight:600; font-size:11.5px;">📊 Produzione pianificata per linea (ordini aperti: giorni per 3 settimane, poi colonna "Oltre")</div>
         ${blocchi}
       </div>`;
   }
@@ -2304,10 +2544,11 @@ function renderMF50(el) {
       o.righe.forEach(riga => {
         if (riga.prodotto === r.codice) {
           const idx = bucketIndexForDate(riga.dataRichiesta, buckets);
-          if (idx !== null) richiestoWeek[idx] += riga.quantita;
+          if (idx !== null) richiestoWeek[idx] += Math.max(0, riga.quantita - (riga.consegnato || 0));
         }
       });
     });
+    domandaDipendente(r.codice).forEach(d => { const idx = bucketIndexForDate(d.data, buckets); if (idx !== null) richiestoWeek[idx] += d.qta; });
 
     const lineeRiga = r.linee.length > 0 ? r.linee : [null]; // null = "non assegnata a una linea specifica"
     const baselinePerLinea = {};
@@ -2331,7 +2572,8 @@ function renderMF50(el) {
       return tot;
     }
 
-    const righeLinea = lineeRiga.map(l => {
+    const lineeVis = lineeRiga.filter(lineaVisibile);
+    const righeLinea = lineeVis.map(l => {
       const key = l || '_';
       const cellsGiaProgrammato = buckets.map((b, i) => {
         const v = baselinePerLinea[key][i];
@@ -2380,9 +2622,24 @@ function renderMF50(el) {
       </div>`;
   }
 
-  const matriciHTML = righeCalc.map(matriceProdottoHTML).join('');
+  const primaLinea = r => (r.linee.length ? r.linee.slice().sort()[0] : '￿');
+  const ordinati = righeCalc.slice().sort((a, b) =>
+    mf50Sel.ordina === 'fabbisogno' ? (b.fabbisogno - a.fabbisogno || a.codice.localeCompare(b.codice))
+    : mf50Sel.ordina === 'codice' ? a.codice.localeCompare(b.codice)
+    : (primaLinea(a).localeCompare(primaLinea(b)) || a.codice.localeCompare(b.codice)));
+  let lineaPrec = null;
+  const matriciHTML = ordinati.map(r => {
+    const h = matriceProdottoHTML(r);
+    if (!h || mf50Sel.ordina !== 'linea') return h;
+    const pl = r.linee.length ? primaLinea(r) : MF50_NESSUNA_LINEA;
+    let testa = '';
+    if (pl !== lineaPrec) { lineaPrec = pl; const info = lineeProduzione.find(l => l.codice === pl); testa = `<div style="margin:12px 10px 4px 10px; font-weight:700; font-size:12px; color:#3a5a8c; border-bottom:1px solid #b9c4d6;">▸ ${pl}${info ? ' — ' + info.descrizione : ''}</div>`; }
+    return testa + h;
+  }).join('');
+  const descrSel = [mf50Sel.linee.length ? 'linee: ' + mf50Sel.linee.join(', ') : '', mf50Sel.gruppi.length ? 'gruppi: ' + mf50Sel.gruppi.join(', ') : '', mf50Sel.materiale ? 'materiale: ' + mf50Sel.materiale : '', mf50Sel.soloFabbisogno ? 'solo con fabbisogno' : ''].filter(Boolean).join(' · ') || 'tutto';
 
   el.innerHTML = `
+    <div class="actionrow"><button class="actionbtn" id="mf50-modifica-sel">✎ Modifica selezione</button><span style="font-size:11px;color:#5a6470;margin-left:10px;">Selezione: <strong>${descrSel}</strong> — ${righeCalc.length} prodotti</span></div>
     <div class="formwrap" style="padding-bottom:0;">
       <p style="font-size:11px;color:#5a6470;margin:0 0 4px 0;">Scrivi direttamente nella matrice le quantità da produrre (il passato è raggruppato in un'unica colonna "⚠ Arretrato", da oggi al venerdì della 3ª settimana è giornaliero, poi settimanale), poi conferma: verranno creati gli ordini di produzione necessari. Le pianificazioni non verificano ancora la capacità della linea (gestione futura).</p>
     </div>
@@ -2397,6 +2654,7 @@ function renderMF50(el) {
     </div>
   `;
 
+  document.getElementById('mf50-modifica-sel').addEventListener('click', () => { mf50Sel.applicata = false; renderScreenContent(); });
   document.querySelectorAll('.mat-cell').forEach(inp => {
     inp.addEventListener('input', e => {
       const { prodotto, linea, week } = e.target.dataset;
@@ -2410,9 +2668,10 @@ function renderMF50(el) {
       ordiniVendita.filter(o => o.stato === 'aperto').forEach(o => {
         o.righe.forEach(riga => { if (riga.prodotto === prodotto) {
           const idx = bucketIndexForDate(riga.dataRichiesta, buckets);
-          if (idx !== null) richiestoWeek[idx] += riga.quantita;
+          if (idx !== null) richiestoWeek[idx] += Math.max(0, riga.quantita - (riga.consegnato || 0));
         }});
       });
+      domandaDipendente(prodotto).forEach(d => { const idx = bucketIndexForDate(d.data, buckets); if (idx !== null) richiestoWeek[idx] += d.qta; });
       const lineeRiga = r.linee.length > 0 ? r.linee : [null];
       const pianificatoTot = new Array(buckets.length).fill(0);
       lineeRiga.forEach(l => {
@@ -2727,7 +2986,7 @@ function renderAssocMatFor(el) {
   }));
 }
 
-// ============ MD01 (MRP - vista fabbisogno materiali) ============
+// ============ MRP (stile SAP): motore di calcolo + MD01 / MD03 / MD04 ============
 function richiestoApertoPer(codice) {
   return richiesteAcquisto.filter(r => r.materiale === codice && r.stato === 'aperta').reduce((s,r) => s + r.quantita, 0);
 }
@@ -2737,245 +2996,499 @@ function ordinatoApertoPer(codice) {
   return tot;
 }
 
-// ---- Logica MRP condivisa fra MD01 (tutti i materiali), MD03 (un materiale) e MD04 (elenco) ----
-// La giacenza "disponibile" per il fabbisogno netto è la giacenza fisica MENO la scorta di
-// sicurezza, esattamente come nel vero MRP SAP (tipo PD) quando la scorta di sicurezza viene
-// considerata: è un floor che l'MRP protegge attivamente, generando fabbisogno anche senza
-// nessun ordine dietro, pur di non scendere sotto quella soglia.
-function giacenzaDisponibileMD(mp) {
-  return getGiacenza(mp.codice) - (Number(mp.scortaSicurezza) || 0);
+// ---- Date: calendario di calendario e calendario lavorativo (weekend e festivi italiani esclusi) ----
+function oggiISO() { const d = new Date(); d.setHours(0,0,0,0); return isoDate(d); }
+function dataDaISO(s) { const p = String(s).split('-').map(Number); return new Date(p[0], p[1]-1, p[2]); }
+function addGiorniCal(iso, n) { const d = dataDaISO(iso); d.setDate(d.getDate() + n); return isoDate(d); }
+function addGiorniLav(iso, n) {
+  const d = dataDaISO(iso); const passo = n < 0 ? -1 : 1; let resto = Math.abs(n);
+  while (resto > 0) { d.setDate(d.getDate() + passo); if (!isWeekendOFestivo(d)) resto--; }
+  return isoDate(d);
 }
-function calcolaBucketMD(mp, buckets) {
-  const aperti = ordiniProduzione.filter(o => o.stato === 'aperto');
-  const lordo = new Array(buckets.length).fill(0);
-  aperti.forEach(op => {
-    const comp = op.componenti.find(c => c.codice === mp.codice);
-    if (!comp) return;
-    const idx = bucketIndexForDate(op.dataPianificata, buckets);
-    if (idx !== null) lordo[idx] += comp.qtaTotale;
+function aGiornoLavPrec(iso) { const d = dataDaISO(iso); while (isWeekendOFestivo(d)) d.setDate(d.getDate() - 1); return isoDate(d); }
+function aGiornoLavSucc(iso) { const d = dataDaISO(iso); while (isWeekendOFestivo(d)) d.setDate(d.getDate() + 1); return isoDate(d); }
+
+// ---- Parametri MRP del materiale (vuoto/0 = parametro non attivo, come nel vero SAP) ----
+function mrpParam(m) {
+  const n = v => Number(v) || 0;
+  return {
+    tipo: m.tipoMRP || 'PD', politica: m.politicaLotto || 'EX',
+    lottoFisso: n(m.lottoFisso), lottoMin: n(m.lottoMin), lottoMax: n(m.lottoMax), livelloMax: n(m.livelloMax),
+    arrot: n(m.arrotondamento), tConsegna: n(m.tempoConsegna), tEntrata: n(m.tempoEntrataMerci),
+    scortaSic: n(m.scortaSicurezza), puntoRiord: n(m.puntoRiordino),
+  };
+}
+
+// Elementi MRP di un materiale: fabbisogni dipendenti (ODP aperti) ed entrate (RA aperte, OA non ricevuti).
+// Tutto ciò che è datato nel passato viene pianificato "da oggi" (dataEff).
+function eventiMRP(mp, esclusiRA, extra) {
+  const oggi = oggiISO(); const ev = [];
+  const eff = d => (!d || d < oggi) ? oggi : d;
+  ordiniProduzione.filter(o => o.stato === 'aperto').forEach(o => {
+    const comp = (o.componenti || []).find(c => c.codice === mp.codice);
+    if (comp && Number(comp.qtaTotale) > 0) ev.push({ tipo:'fabbisogno', fonte:'ODP', rif:o.numero, data:o.dataPianificata || oggi, dataEff:eff(o.dataPianificata), qta:Number(comp.qtaTotale) });
   });
-  const giaRichiesto = new Array(buckets.length).fill(0);
-  richiesteAcquisto.filter(r => r.materiale === mp.codice && r.stato === 'aperta').forEach(r => {
-    const idx = bucketIndexForDate(r.dataRichiesta, buckets);
-    if (idx !== null) giaRichiesto[idx] += r.quantita;
+  richiesteAcquisto.filter(r => r.materiale === mp.codice && r.stato === 'aperta' && !(esclusiRA && esclusiRA.has(r.numero))).forEach(r => {
+    ev.push({ tipo:'entrata', fonte:'RA', rif:r.numero, data:r.dataRichiesta || oggi, dataEff:eff(r.dataRichiesta), qta:Number(r.quantita) });
   });
-  const giaOrdinato = new Array(buckets.length).fill(0);
-  ordiniAcquisto.forEach(o => { o.righe.forEach(r => {
+  ordiniAcquisto.forEach(o => { (o.righe || []).forEach(r => {
     if (r.materiale === mp.codice && !r._rimossa && !rigaCompleta(r)) {
-      const idx = bucketIndexForDate(r.dataConsegna, buckets);
-      if (idx !== null) giaOrdinato[idx] += (Number(r.quantita) - rigaQtaRicevuta(r));
+      ev.push({ tipo:'entrata', fonte:'OA', rif:o.numero, data:r.dataConsegna || oggi, dataEff:eff(r.dataConsegna), qta:Number(r.quantita) - rigaQtaRicevuta(r) });
     }
   }); });
-  return { lordo, giaRichiesto, giaOrdinato };
+  (extra || []).forEach(x => { if (x.codice === mp.codice && x.qta > 0) ev.push({ tipo:'fabbisogno', fonte:'PIAN', rif:x.rif, data:x.data, dataEff:eff(x.data), qta:x.qta }); });
+  // stesso giorno: prima le entrate, poi i fabbisogni (come in SAP)
+  ev.sort((a,b) => a.dataEff < b.dataEff ? -1 : a.dataEff > b.dataEff ? 1 : (a.tipo === b.tipo ? 0 : (a.tipo === 'entrata' ? -1 : 1)));
+  return ev;
 }
-function draftValMD(codice, i) {
-  const key = `${codice}::${i}`;
-  return mdCellDraft[key] !== undefined ? mdCellDraft[key] : '';
+
+function fineePeriodoMRP(iso, politica) {
+  if (politica === 'WB') { const d = dataDaISO(iso); const dow = d.getDay(); d.setDate(d.getDate() + (dow === 0 ? 0 : 7 - dow)); return isoDate(d); }
+  if (politica === 'MB') { const d = dataDaISO(iso); return isoDate(new Date(d.getFullYear(), d.getMonth() + 1, 0)); }
+  return iso; // EX, FX, HB, TB: solo il giorno
 }
-function proiezioneMD(mp, dati, buckets) {
-  // giacenza proiettata cumulativa: disponibile (fisica - scorta sic.) + già richiesto + già
-  // ordinato + bozza corrente - fabbisogno lordo, periodo per periodo
-  const proiezione = [];
-  let run = giacenzaDisponibileMD(mp);
-  for (let i = 0; i < buckets.length; i++) {
-    const bozza = Number(draftValMD(mp.codice, i)) || 0;
-    run = run + dati.giaRichiesto[i] + dati.giaOrdinato[i] + bozza - dati.lordo[i];
-    proiezione.push(run);
+
+// Dimensionamento del lotto, nell'ordine SAP: politica di lotto -> lotto minimo -> arrotondamento -> lotto massimo (spezza).
+// Ritorna l'elenco delle quantità degli ordini (più di uno se si supera il lotto massimo o con lotto fisso).
+function dimensionaLottoMRP(netto, disp, p) {
+  if (netto <= 0) return [];
+  if (p.politica === 'FX' && p.lottoFisso > 0) {
+    const k = Math.ceil(netto / p.lottoFisso); const out = [];
+    for (let i = 0; i < k; i++) out.push(p.lottoFisso);
+    return out;
   }
-  return proiezione;
+  let q = netto;
+  if (p.politica === 'HB' && p.livelloMax > 0) q = Math.max(netto, p.livelloMax - disp);
+  if (p.lottoMin > 0 && q < p.lottoMin) q = p.lottoMin;
+  if (p.arrot > 0) q = Math.ceil(q / p.arrot) * p.arrot;
+  const pezzi = [];
+  if (p.lottoMax > 0 && q > p.lottoMax) {
+    let max = p.lottoMax;
+    if (p.arrot > 0) max = Math.max(p.arrot, Math.floor(max / p.arrot) * p.arrot);
+    while (q > max) { pezzi.push(max); q -= max; }
+  }
+  if (q > 0) pezzi.push(q);
+  return pezzi;
 }
-function renderBloccoMD(mp, dati, buckets) {
-  const proiezione = proiezioneMD(mp, dati, buckets);
-  const scortaSic = Number(mp.scortaSicurezza) || 0;
-  const cellsRichiedi = buckets.map((b,i) => `
-    <td style="padding:2px;"><input type="number" min="0" class="md01-cell" data-materiale="${mp.codice}" data-week="${i}" value="${draftValMD(mp.codice,i)}" placeholder="0" style="width:48px; font-size:10.5px; padding:2px; border:1px solid #b9c4d6; text-align:center;"></td>
-  `).join('');
-  return `
-    <div style="margin:0 10px 16px 10px;" data-materiale-block="${mp.codice}">
-      <div style="background:#dfe6f0; border:1px solid #b9c4d6; padding:6px 8px; font-weight:600; font-size:11.5px;">
-        ${mp.codice} - ${mp.descrizione} <span style="font-weight:400; font-size:10.5px; color:#3a4453;">| Giacenza fisica: ${getGiacenza(mp.codice)}${scortaSic > 0 ? ` · Scorta sicurezza: ${scortaSic}` : ''}</span>
+
+// Schedulazione di un ordine: all'indietro dalla data di fabbisogno (tempo entrata merci in gg lavorativi, tempo di
+// consegna previsto in gg di calendario). Se la data di rilascio cadrebbe nel passato, si schedula in avanti da oggi
+// e l'ordine arriva dopo il fabbisogno (ritardo = true), come il messaggio SAP "date non rispettabili".
+function schedulaPropostaMRP(p, dataDisp, oggi) {
+  let consegna = p.tEntrata > 0 ? addGiorniLav(dataDisp, -p.tEntrata) : dataDisp;
+  let rilascio = aGiornoLavPrec(addGiorniCal(consegna, -p.tConsegna));
+  let ritardo = false;
+  if (rilascio < oggi) {
+    rilascio = aGiornoLavSucc(oggi);
+    consegna = aGiornoLavSucc(addGiorniCal(rilascio, p.tConsegna));
+    const disponibile = p.tEntrata > 0 ? addGiorniLav(consegna, p.tEntrata) : consegna;
+    ritardo = disponibile > dataDisp;
+  }
+  return { dataRilascio: rilascio, dataConsegna: consegna, ritardo };
+}
+
+// Pianificazione di un materiale. PD = deterministica (fabbisogni reali + scorta di sicurezza);
+// VB = a punto di riordino (giacenza + ordini in arrivo <= punto di riordino); ND = non pianificato.
+function pianificaMRP(mp, esclusiRA, extra) {
+  const p = mrpParam(mp); const oggi = oggiISO(); const stock = getGiacenza(mp.codice);
+  const ev = eventiMRP(mp, esclusiRA, extra); const proposte = [];
+  if (p.tipo === 'ND') return { mp, p, stock, eventi: ev, proposte };
+  if (p.tipo === 'VB') {
+    const disp = stock + ev.filter(e => e.tipo === 'entrata').reduce((s,e) => s + e.qta, 0);
+    if (p.puntoRiord > 0 && disp <= p.puntoRiord) {
+      let corrente = disp;
+      dimensionaLottoMRP(p.puntoRiord - disp + 1, disp, p).forEach(q => {
+        const s = schedulaPropostaMRP(p, oggi, oggi);
+        proposte.push({ qta: q, dataFabbisogno: oggi, dataRilascio: s.dataRilascio, dataConsegna: s.dataConsegna, ritardo: false });
+        corrente += q;
+      });
+    }
+    return { mp, p, stock, eventi: ev, proposte };
+  }
+  // PD
+  const date = [...new Set(ev.map(e => e.dataEff))];
+  if (!date.length) date.push(oggi);
+  let disp = stock;
+  for (const d of date) {
+    ev.filter(e => e.dataEff === d).forEach(e => { disp += e.tipo === 'entrata' ? e.qta : -e.qta; });
+    let giri = 0;
+    while (disp < p.scortaSic && giri++ < 500) {
+      const fine = fineePeriodoMRP(d, p.politica);
+      let run = disp, minimo = disp;
+      ev.filter(e => e.dataEff > d && e.dataEff <= fine).forEach(e => { run += e.tipo === 'entrata' ? e.qta : -e.qta; if (run < minimo) minimo = run; });
+      const pezzi = dimensionaLottoMRP(p.scortaSic - minimo, disp, p);
+      if (!pezzi.length) break;
+      pezzi.forEach(q => {
+        const s = schedulaPropostaMRP(p, d, oggi);
+        proposte.push({ qta: q, dataFabbisogno: d, dataRilascio: s.dataRilascio, dataConsegna: s.dataConsegna, ritardo: s.ritardo });
+        disp += q;
+      });
+    }
+  }
+  return { mp, p, stock, eventi: ev, proposte };
+}
+
+// Messaggi di eccezione (come in MD04 reale): 10 anticipare, 15 posticipare, 20 annullare, 96 scorta di sicurezza violata.
+// Restituisce una mappa "FONTE|riferimento" -> {codice, testo}.
+function eccezioniMRP(mp) {
+  const p = mrpParam(mp); const out = {};
+  if (p.tipo !== 'PD') return out;
+  const stock = getGiacenza(mp.codice); const ev = eventiMRP(mp);
+  function primoFabbisogno(lista) {
+    const date = [...new Set(lista.map(e => e.dataEff))]; let disp = stock;
+    for (const d of date) {
+      const gruppo = lista.filter(e => e.dataEff === d);
+      gruppo.forEach(e => { disp += e.tipo === 'entrata' ? e.qta : -e.qta; });
+      if (disp < p.scortaSic) return { data: d, disp, gruppo };
+    }
+    return null;
+  }
+  const carenza = primoFabbisogno(ev);
+  if (carenza) {
+    const f = carenza.gruppo.find(e => e.tipo === 'fabbisogno');
+    const chiave = f ? 'ODP|' + f.rif : 'SS|-';
+    out[chiave] = carenza.disp >= 0 && p.scortaSic > 0
+      ? { codice: '96', testo: 'Scorta di sicurezza violata' }
+      : { codice: '—', testo: 'Fabbisogno non coperto' };
+  }
+  ev.filter(e => e.tipo === 'entrata').forEach(r => {
+    const senza = ev.filter(e => e !== r);
+    const need = primoFabbisogno(senza);
+    const chiave = r.fonte + '|' + r.rif;
+    if (!need) { out[chiave] = { codice: '20', testo: 'Annullare: non necessario' }; return; }
+    const attesa = p.tEntrata > 0 ? addGiorniLav(need.data, -p.tEntrata) : need.data;
+    if (r.dataEff > attesa) out[chiave] = { codice: '10', testo: 'Anticipare al ' + attesa };
+    else if (r.dataEff < attesa) out[chiave] = { codice: '15', testo: 'Posticipare al ' + attesa };
+  });
+  return out;
+}
+
+// ---- Esecuzione: calcolo (anteprima) e salvataggio ----
+function materialiInScopoMRP(codice) {
+  const mps = materiali.filter(m => m.tipo === 'MP');
+  return codice ? mps.filter(m => m.codice === codice) : mps.filter(m => mrpParam(m).tipo !== 'ND');
+}
+async function calcolaRisultatiMRP(codice, modalita) {
+  [materiali, richiesteAcquisto, ordiniAcquisto, ordiniProduzione, movimentazioni] = await Promise.all(
+    ['materiali','richiesteAcquisto','ordiniAcquisto','ordiniProduzione','movimentazioni'].map(k => loadList(k)));
+  const scope = materialiInScopoMRP(codice);
+  const codici = new Set(scope.map(m => m.codice));
+  // Modalità 3 (cancella e ricrea): toglie dal calcolo (e, al salvataggio, elimina) le RA aperte generate dall'MRP
+  // dall'utente corrente per i materiali in scopo. Le RA di altri partecipanti non vengono mai toccate.
+  const esclusi = (modalita === '3')
+    ? richiesteAcquisto.filter(r => r.stato === 'aperta' && r.origine === 'MD01/MRP' && r.creatoDa === currentUser && codici.has(r.materiale)).map(r => r.numero)
+    : [];
+  const set = new Set(esclusi);
+  return { codice, modalita, esclusi, risultati: scope.map(mp => pianificaMRP(mp, set)), salvato: false };
+}
+// MD02: MRP multilivello su un prodotto finito. Livello 1: il fabbisogno del prodotto (ordini di vendita residui, al netto di
+// giacenza e ordini di produzione aperti) genera ordini di produzione PIANIFICATI (non salvati: gli ordini veri si creano in MF50).
+// Livello 2: i loro componenti (distinta base) diventano fabbisogno dipendente delle materie prime, pianificate come in MD01.
+async function calcolaRisultatiMD02(pfCodice, modalita) {
+  [materiali, richiesteAcquisto, ordiniAcquisto, ordiniProduzione, movimentazioni, ordiniVendita, distinte] = await Promise.all(
+    ['materiali','richiesteAcquisto','ordiniAcquisto','ordiniProduzione','movimentazioni','ordiniVendita','distinte'].map(k => loadList(k)));
+  const bom = getBOM(pfCodice);
+  const righe = [];
+  ordiniVendita.filter(o => o.stato !== 'evaso').forEach(o => (o.righe || []).forEach(r => {
+    if (r.prodotto !== pfCodice) return;
+    const residuo = Number(r.quantita) - Number(r.consegnato || 0);
+    if (residuo > 0) righe.push({ ov: o.numero, data: r.dataRichiesta || oggiISO(), qta: residuo });
+  }));
+  righe.sort((a,b) => a.data < b.data ? -1 : a.data > b.data ? 1 : 0);
+  let coperto = getGiacenza(pfCodice) + pianificatoApertoPer(pfCodice);
+  const pianificati = []; const extra = []; const codiciMP = new Set();
+  const copertoSL = {}; // semilavorati: disponibilità residua (giacenza + ODP aperti) consumata man mano
+  // Fabbisogno dipendente: i componenti di un ordine pianificato diventano fabbisogno. Un componente che è un
+  // semilavorato (tipo PF) viene prima netto di giacenza/ordini aperti; il mancante genera un ordine pianificato
+  // di livello successivo, e così via fino alle materie prime. Stessa data del fabbisogno (nessun lead time di produzione).
+  const esplodiFabbisogno = (codice, qta, data, rifPadre, livello, percorso) => {
+    const b = getBOM(codice);
+    (b ? b.componenti : []).forEach(c => {
+      if (percorso.includes(c.codice)) return;
+      const need = Number(c.qta) * qta;
+      const m = materiali.find(x => x.codice === c.codice);
+      if (m && m.tipo === 'PF') {
+        if (copertoSL[c.codice] === undefined) copertoSL[c.codice] = getGiacenza(c.codice) + pianificatoApertoPer(c.codice);
+        const usa = Math.min(copertoSL[c.codice], need); copertoSL[c.codice] -= usa;
+        const mancSL = need - usa;
+        if (mancSL > 0) {
+          const rif = 'PIAN-' + (pianificati.length + 1);
+          pianificati.push({ rif, prodotto: c.codice, qta: mancSL, data, ov: '(da ' + rifPadre + ')', livello });
+          esplodiFabbisogno(c.codice, mancSL, data, rif, livello + 1, [...percorso, c.codice]);
+        }
+      } else {
+        codiciMP.add(c.codice);
+        extra.push({ codice: c.codice, qta: need, data, rif: rifPadre });
+      }
+    });
+  };
+  righe.forEach(r => {
+    const usa = Math.min(coperto, r.qta); coperto -= usa;
+    const mancante = r.qta - usa;
+    if (mancante > 0) {
+      const rif = 'PIAN-' + (pianificati.length + 1);
+      pianificati.push({ rif, prodotto: pfCodice, qta: mancante, data: r.data, ov: r.ov, livello: 1 });
+      esplodiFabbisogno(pfCodice, mancante, r.data, rif, 2, [pfCodice]);
+    }
+  });
+  const scope = materiali.filter(m => m.tipo === 'MP' && codiciMP.has(m.codice) && mrpParam(m).tipo !== 'ND');
+  const codici = new Set(scope.map(m => m.codice));
+  const esclusi = (modalita === '3')
+    ? richiesteAcquisto.filter(r => r.stato === 'aperta' && r.origine === 'MD01/MRP' && r.creatoDa === currentUser && codici.has(r.materiale)).map(r => r.numero)
+    : [];
+  const set = new Set(esclusi);
+  return { codice: pfCodice, modalita, esclusi, pianificati, senzaDistinta: !bom, risultati: scope.map(mp => pianificaMRP(mp, set, extra)), salvato: false };
+}
+async function salvaRisultatiMRP(ris) {
+  richiesteAcquisto = await loadList('richiesteAcquisto');
+  let eliminate = 0, create = 0;
+  for (const num of ris.esclusi) {
+    const r = richiesteAcquisto.find(x => x.numero === num && x.stato === 'aperta');
+    if (r) { await eliminaRecord('richiesteAcquisto', chiaveDiRecord('richiesteAcquisto', r)); eliminate++; }
+  }
+  richiesteAcquisto = richiesteAcquisto.filter(r => !ris.esclusi.includes(r.numero));
+  for (const x of ris.risultati) {
+    for (const pr of x.proposte) {
+      const rec = {
+        numero: await prossimoNumero('RA'), materiale: x.mp.codice, quantita: pr.qta,
+        dataRichiesta: pr.dataConsegna, dataRilascio: pr.dataRilascio, dataFabbisogno: pr.dataFabbisogno,
+        stato: 'aperta', origine: 'MD01/MRP', creatoDa: currentUser, creatoIl: nowStr(),
+      };
+      await aggiungiRecord('richiesteAcquisto', rec);
+      richiesteAcquisto.push(rec); create++;
+    }
+  }
+  return { create, eliminate };
+}
+
+// ---- Presentazione ----
+let draftMD01 = { materiale: "", modalita: "1", mostra: true, risultato: null };
+function htmlRisultatiMRP(ris) {
+  const righe = [];
+  ris.risultati.forEach(x => x.proposte.forEach(pr => righe.push({ x, pr })));
+  const totRA = righe.length;
+  const sommario = `${ris.risultati.length} materiale/i pianificato/i · ${totRA} richiesta/e d'acquisto ${ris.salvato ? 'create' : 'proposte'}`
+    + (ris.esclusi.length ? ` · ${ris.salvato ? 'eliminate' : 'da eliminare'} ${ris.esclusi.length} RA MRP aperte precedenti (modalità 3)` : '');
+  const pianHTML = ris.pianificati ? `
+      <p style="font-size:11px; margin:0 0 4px 0;"><strong>Ordini di produzione pianificati — prodotto e semilavorati</strong> (non salvati: per crearli usa MF50; i semilavorati vanno prodotti prima del padre)</p>
+      ${ris.senzaDistinta ? '<p style="font-size:11px; color:#a83232;">Il prodotto non ha una distinta base: crea prima la BOM in CS01.</p>' : ''}
+      <div class="tablewrap" style="margin:0 0 10px 0;">
+        <table>
+          <thead><tr><th>Riferimento</th><th>Prodotto</th><th>Quantità da produrre</th><th>Data fabbisogno</th><th>Ordine di vendita / origine</th><th>Livello</th></tr></thead>
+          <tbody>${ris.pianificati.length === 0 ? '<tr><td colspan="6" style="text-align:center; color:#9a9a8f; padding:10px;">Il fabbisogno del prodotto è già coperto da giacenza e ordini di produzione aperti.</td></tr>' :
+            ris.pianificati.map(p => `<tr><td>${p.rif}</td><td>${materialeLabel(p.prodotto)}</td><td style="font-weight:600;">${p.qta}</td><td>${p.data}</td><td>${p.ov}</td><td>${p.livello || 1}</td></tr>`).join('')}</tbody>
+        </table>
       </div>
+      <p style="font-size:11px; margin:0 0 4px 0;"><strong>Materie prime di tutti i livelli</strong></p>` : '';
+  return `
+    <div style="margin:10px;">
+      ${pianHTML}
+      <p style="font-size:11px; margin:0 0 6px 0;"><strong>${ris.salvato ? '✔ Risultato salvato' : 'Risultato dell\'esecuzione (non ancora salvato)'}:</strong> ${sommario}.</p>
       <div class="tablewrap" style="margin:0;">
-        <table style="min-width:${140+buckets.length*52}px;">
-          <thead><tr><th style="min-width:150px;">Dato</th>${buckets.map(b => `<th style="text-align:center; min-width:48px; font-size:10px; ${b.arretrato?'background:#ffe0b3; color:#8a4a00; font-weight:700;':(b.speciale?'color:#a83232; background:#fbeaea;':'')} ${b.oggi?'text-decoration:underline;':''}">${b.label}</th>`).join('')}</tr></thead>
-          <tbody>
-            <tr style="background:#f4f4ee;"><td>Giacenza proiettata${scortaSic>0 ? ' (netta da scorta sic.)' : ''}</td>${proiezione.map(v => `<td class="proiezione-md01-cell" style="text-align:center; font-weight:600; color:${v<0?'#a83232':'#1a6b2e'};">${v}</td>`).join('')}</tr>
-            <tr><td>Fabbisogno lordo (ODP)</td>${dati.lordo.map(v => `<td style="text-align:center; font-size:10.5px;">${v||''}</td>`).join('')}</tr>
-            <tr><td style="color:#3a5a8c;">Già richiesto (RA)</td>${dati.giaRichiesto.map(v => `<td style="text-align:center; font-size:10.5px; color:#3a5a8c;">${v||''}</td>`).join('')}</tr>
-            <tr><td style="color:#3a5a8c;">Già ordinato (OA)</td>${dati.giaOrdinato.map(v => `<td style="text-align:center; font-size:10.5px; color:#3a5a8c;">${v||''}</td>`).join('')}</tr>
-            <tr><td style="padding-left:14px;">↳ Da richiedere ora</td>${cellsRichiedi}</tr>
+        <table>
+          <thead><tr><th>Materiale</th><th>Tipo MRP</th><th>Politica lotto</th><th>Giacenza</th><th>Scorta sic.</th><th>Quantità RA</th><th>Data fabbisogno</th><th>Data rilascio</th><th>Data consegna</th><th>Avviso</th></tr></thead>
+          <tbody>${totRA === 0 ? '<tr><td colspan="10" style="text-align:center; color:#9a9a8f; padding:14px;">Nessun fabbisogno netto da coprire: nessuna richiesta d\'acquisto da creare.</td></tr>' :
+            righe.map(({x, pr}) => `<tr><td>${materialeLabel(x.mp.codice)}</td><td>${x.p.tipo}</td><td>${x.p.tipo === 'VB' ? '-' : x.p.politica}</td><td>${x.stock}</td><td>${x.p.scortaSic || 0}</td><td style="font-weight:600;">${pr.qta}</td><td>${pr.dataFabbisogno}</td><td>${pr.dataRilascio}</td><td>${pr.dataConsegna}</td><td style="color:#a83232;">${pr.ritardo ? '⚠ Consegna dopo la data di fabbisogno (tempo di consegna non rispettabile)' : ''}</td></tr>`).join('')}
           </tbody>
         </table>
       </div>
-      <div style="display:flex; align-items:center; gap:10px; margin-top:6px;">
-        <button class="actionbtn genera-ra-piano" data-materiale="${mp.codice}" style="padding:5px 10px; font-size:11px;">✔ Genera richieste d'acquisto da questo piano</button>
-      </div>
     </div>`;
 }
-function attaccaListenersMD(buckets, materialiConFabbisogno) {
-  document.querySelectorAll('.md01-cell').forEach(inp => {
-    inp.addEventListener('input', e => {
-      const { materiale, week } = e.target.dataset;
-      mdCellDraft[`${materiale}::${week}`] = e.target.value;
-      // ricalcola live SOLO la riga "Giacenza proiettata" del blocco di questo materiale
-      const blocco = document.querySelector(`[data-materiale-block="${materiale}"]`);
-      if (!blocco) return;
-      const item = materialiConFabbisogno.find(x => x.mp.codice === materiale);
-      if (!item) return;
-      const proiez = proiezioneMD(item.mp, item.dati, buckets);
-      blocco.querySelectorAll('.proiezione-md01-cell').forEach((td, i) => {
-        td.textContent = proiez[i];
-        td.style.color = proiez[i] < 0 ? '#a83232' : '#1a6b2e';
-      });
-    });
-  });
-  document.querySelectorAll('.genera-ra-piano').forEach(btn => {
-    btn.addEventListener('click', () => withGuard(async () => {
-      const materiale = btn.dataset.materiale;
-      richiesteAcquisto = await loadList('richiesteAcquisto');
-      const creati = [];
-      for (let i = 0; i < buckets.length; i++) {
-        const key = `${materiale}::${i}`;
-        const qta = Number(mdCellDraft[key]) || 0;
-        if (qta > 0) {
-          const rec = {
-            numero: await prossimoNumero('RA'), materiale, quantita: qta, dataRichiesta: buckets[i].creaDataISO || buckets[i].startISO,
-            stato: 'aperta', origine: 'MD01/MRP', creatoDa: currentUser, creatoIl: nowStr(),
-          };
-          creati.push(rec);
-        }
-        delete mdCellDraft[key];
-      }
-      if (creati.length === 0) {
-        setStatus('Nessuna quantità inserita da confermare per questo materiale.', true);
-        return;
-      }
-      for (const rec of creati) { await aggiungiRecord('richiesteAcquisto', rec); richiesteAcquisto.push(rec); }
-      const riepilogo = creati.map(c => `${c.numero}: ${c.quantita} il ${c.dataRichiesta}`).join(' — ');
-      setStatus(`Generate ${creati.length} richiesta/e d'acquisto per ${materiale}: ${riepilogo}`);
-      renderMain();
-    }));
-  });
+async function eseguiMRPDaSchermata(draft) {
+  const ris = draft === draftMD02 ? await calcolaRisultatiMD02(draft.materiale, draft.modalita) : await calcolaRisultatiMRP(draft.materiale, draft.modalita);
+  if (draft.mostra) { draft.risultato = ris; renderScreenContent(); return; }
+  const out = await salvaRisultatiMRP(ris);
+  ris.salvato = true; draft.risultato = ris;
+  setStatus(`MRP eseguito: create ${out.create} richieste d'acquisto${out.eliminate ? `, eliminate ${out.eliminate} RA MRP precedenti` : ''}.`);
+  renderMain();
+}
+function collegaAzioniMRP(draft) {
+  const esegui = document.getElementById('mrp-esegui');
+  if (esegui) esegui.addEventListener('click', () => withGuard(async () => {
+    if ((draft === draftMD03 || draft === draftMD02) && !draft.materiale) { setStatus('Seleziona un materiale.', true); return; }
+    await eseguiMRPDaSchermata(draft);
+  }));
+  const salva = document.getElementById('mrp-salva');
+  if (salva) salva.addEventListener('click', () => withGuard(async () => {
+    const out = await salvaRisultatiMRP(draft.risultato);
+    draft.risultato.salvato = true;
+    setStatus(`Salvate ${out.create} richieste d'acquisto${out.eliminate ? `, eliminate ${out.eliminate} RA MRP precedenti` : ''}.`);
+    renderMain();
+  }));
+  const scarta = document.getElementById('mrp-scarta');
+  if (scarta) scarta.addEventListener('click', () => { draft.risultato = null; renderScreenContent(); });
+  const modalita = document.getElementById('f-modalita-mrp');
+  if (modalita) modalita.addEventListener('change', e => { draft.modalita = e.target.value; });
+  const mostra = document.getElementById('f-mostra-mrp');
+  if (mostra) mostra.addEventListener('change', e => { draft.mostra = e.target.checked; });
+}
+function azioniMRPHTML(draft) {
+  const pendente = draft.risultato && !draft.risultato.salvato;
+  return `<div class="actionrow"><button class="actionbtn" id="mrp-esegui">▶ Esegui MRP</button>${pendente ? ` <button class="actionbtn" id="mrp-salva">✔ Salva richieste d'acquisto</button> <button class="actionbtn" id="mrp-scarta">✖ Scarta risultato</button>` : ''}</div>`;
+}
+function parametriMRPHTML(draft) {
+  return `
+    <label>Modalità di pianificazione</label>
+    <select id="f-modalita-mrp">
+      <option value="1" ${draft.modalita === '1' ? 'selected' : ''}>1 - Adatta dati di pianificazione (consigliato)</option>
+      <option value="3" ${draft.modalita === '3' ? 'selected' : ''}>3 - Cancella e ricrea (solo le tue RA MRP aperte)</option>
+    </select>
+    <label>Mostra risultati prima di salvare</label>
+    <input id="f-mostra-mrp" type="checkbox" ${draft.mostra ? 'checked' : ''} style="justify-self:start;">`;
 }
 
-// ============ MD01 (MRP collettivo - tutti i materiali) ============
+// ============ MD01 (esecuzione MRP - tutti i materiali) ============
 function renderMD01(el) {
-  const materiePrime = materiali.filter(m => m.tipo === 'MP');
-  const buckets = generateBucketsMF50();
-
-  const materialiConFabbisogno = materiePrime.map(mp => {
-    const dati = calcolaBucketMD(mp, buckets);
-    const fabbisognoLordoTot = dati.lordo.reduce((s,v) => s+v, 0);
-    return { mp, dati, fabbisognoLordoTot };
-  }).filter(x => x.fabbisognoLordoTot > 0);
-
+  const d = draftMD01;
+  const mat = d.materiale ? materiali.find(m => m.codice === d.materiale) : null;
   el.innerHTML = `
-    <div class="formwrap" style="padding-bottom:0;">
-      <p style="font-size:11px;color:#5a6470;margin:0 0 4px 0;">Fabbisogno di materie prime per periodo: una colonna unica "⚠ Arretrato" per tutto ciò che era già previsto prima di oggi, poi giornaliero fino al venerdì della terza settimana, poi settimanale — al netto di giacenza disponibile (fisica meno scorta di sicurezza), richieste d'acquisto e ordini d'acquisto già aperti. Scrivi la quantità da richiedere nel periodo giusto, poi conferma.</p>
+    ${azioniMRPHTML(d)}
+    <div class="formwrap">
+      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Esecuzione dell'MRP come in SAP: per ogni materia prima pianificata (tipo MRP PD o VB) calcola il fabbisogno netto e crea le richieste d'acquisto, applicando scorta di sicurezza, politica e dimensione del lotto, multiplo e tempi di consegna del materiale (MM01/MM02). I parametri a 0 o vuoti non sono attivi. Lascia il materiale vuoto per pianificare tutte le materie prime.</p>
+      <div class="formgrid">
+        <label>Materiale (vuoto = tutti)</label>
+        ${campoF4HTML('f-materiale-md01', mat ? materialeLabel(mat.codice) : '', '-- tutte le materie prime (F4 per sceglierne una) --')}
+        ${parametriMRPHTML(d)}
+      </div>
+      ${mat ? '<p style="margin:6px 0 0 0;"><span class="rowaction" id="md01-tutti">✕ torna a tutti i materiali</span></p>' : ''}
     </div>
-    <div style="flex:1; overflow:auto;">
-      ${materialiConFabbisogno.length === 0 ? '<p style="font-size:11px;color:#9a9a8f;margin:0 10px 10px 10px;">Nessun fabbisogno da ordini di produzione aperti al momento.</p>' : materialiConFabbisogno.map(({mp,dati}) => renderBloccoMD(mp, dati, buckets)).join('')}
-    </div>
+    ${d.risultato ? htmlRisultatiMRP(d.risultato) : ''}
   `;
-  attaccaListenersMD(buckets, materialiConFabbisogno);
+  collegaF4('f-materiale-md01', 'Cerca materia prima', materiali.filter(m => m.tipo === 'MP').map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
+    d.materiale = valore; d.risultato = null; renderScreenContent();
+  });
+  const tutti = document.getElementById('md01-tutti');
+  if (tutti) tutti.addEventListener('click', () => { d.materiale = ''; d.risultato = null; renderScreenContent(); });
+  collegaAzioniMRP(d);
 }
 
-// ============ MD03 (MRP singolo materiale) ============
-function renderMD03(el) {
-  const materiePrime = materiali.filter(m => m.tipo === 'MP');
-  const buckets = generateBucketsMF50();
-  const mp = materiali.find(m => m.codice === draftMD03.materiale && m.tipo === 'MP');
-  const dati = mp ? calcolaBucketMD(mp, buckets) : null;
-
+// ============ MD02 (esecuzione MRP multilivello - singolo prodotto) ============
+function renderMD02(el) {
+  const d = draftMD02;
+  const prodotti = materiali.filter(m => m.tipo === 'PF' && getBOM(m.codice));
+  const pf = materiali.find(m => m.codice === d.materiale && m.tipo === 'PF');
   el.innerHTML = `
-    <div class="formwrap" style="padding-bottom:0;">
-      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Pianificazione fabbisogni per un singolo materiale: stessa logica di MD01, ma ad accesso diretto su un solo codice, senza scorrere l'elenco completo.</p>
+    ${azioniMRPHTML(d)}
+    <div class="formwrap">
+      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">MRP multilivello su un prodotto finito, come SAP MD02: il fabbisogno del prodotto (ordini di vendita non evasi, al netto di giacenza e ordini di produzione aperti) genera ordini di produzione pianificati, i cui componenti (distinta base) diventano fabbisogno dipendente delle materie prime. Per ogni materia prima si crea la richiesta d'acquisto con scorta di sicurezza, lotti, multiplo e tempi del materiale. Gli ordini di produzione pianificati non vengono salvati: si creano in MF50.</p>
+      <div class="formgrid">
+        <label>Prodotto finito</label>
+        ${campoF4HTML('f-materiale-md02', pf ? materialeLabel(pf.codice) : '', '-- cerca prodotto finito (F4) --')}
+        ${parametriMRPHTML(d)}
+      </div>
+      ${prodotti.length === 0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun prodotto finito con distinta base. Crea prima la BOM in CS01.</p>' : ''}
+    </div>
+    ${d.risultato ? htmlRisultatiMRP(d.risultato) : ''}
+  `;
+  collegaF4('f-materiale-md02', 'Cerca prodotto finito', prodotti.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
+    d.materiale = valore; d.risultato = null; renderScreenContent();
+  });
+  collegaAzioniMRP(d);
+}
+
+// ============ MD03 (esecuzione MRP - singolo materiale, con elenco disponibilità) ============
+function renderMD03(el) {
+  const d = draftMD03;
+  const mat = materiali.find(m => m.codice === d.materiale && m.tipo === 'MP');
+  const proposte = (d.risultato && d.risultato.risultati[0] && !d.risultato.salvato) ? d.risultato.risultati[0].proposte : [];
+  el.innerHTML = `
+    ${azioniMRPHTML(d)}
+    <div class="formwrap">
+      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Esecuzione MRP per un singolo materiale (livello singolo): stessa logica di MD01, ma sul solo materiale scelto, con la lista disponibilità/fabbisogni sotto (come la vista risultato SAP).</p>
       <div class="formgrid">
         <label>Materiale</label>
-        ${campoF4HTML('f-materiale-md03', mp ? materialeLabel(mp.codice) : '', '-- cerca materia prima (F4) --')}
+        ${campoF4HTML('f-materiale-md03', mat ? materialeLabel(mat.codice) : '', '-- cerca materia prima (F4) --')}
+        ${parametriMRPHTML(d)}
       </div>
     </div>
-    <div style="flex:1; overflow:auto;">
-      ${!mp ? '<p style="font-size:11px;color:#9a9a8f;margin:10px;">Seleziona un materiale per vedere il suo piano.</p>' : renderBloccoMD(mp, dati, buckets)}
-    </div>
+    ${d.risultato ? htmlRisultatiMRP(d.risultato) : ''}
+    ${mat ? `<div style="margin:0 10px;"><p style="font-size:11px; margin:6px 0 2px 0;"><strong>Lista disponibilità/fabbisogni di ${mat.codice}</strong>${proposte.length ? ' (comprese le RA proposte, non ancora salvate)' : ''}</p></div>${htmlTabellaMD04(mat, proposte)}` : ''}
   `;
-  collegaF4('f-materiale-md03', 'Cerca materia prima', materiePrime.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
-    draftMD03.materiale = valore;
-    renderScreenContent();
+  collegaF4('f-materiale-md03', 'Cerca materia prima', materiali.filter(m => m.tipo === 'MP').map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
+    d.materiale = valore; d.risultato = null; renderScreenContent();
   });
-  if (mp) attaccaListenersMD(buckets, [{ mp, dati }]);
+  collegaAzioniMRP(d);
 }
 
 // ============ MD04 (elenco disponibilità/fabbisogni - singolo materiale, solo visualizzazione) ============
-function elementiMD04(mat) {
-  const oggi = new Date(); oggi.setHours(0,0,0,0);
-  const oggiISO = isoDate(oggi);
+function elementiMD04(mat, proposte) {
+  const oggiISO_ = oggiISO();
   const elementi = [];
-  elementi.push({ data: oggiISO, tipo: 'Giacenza iniziale', riferimento: '-', quantita: getGiacenza(mat.codice), ordine: -2 });
+  elementi.push({ data: oggiISO_, tipo: 'Giacenza iniziale', riferimento: '-', quantita: getGiacenza(mat.codice), ordine: -2, chiave: 'GI|-' });
   const scortaSic = Number(mat.scortaSicurezza) || 0;
   if (scortaSic > 0) {
-    elementi.push({ data: oggiISO, tipo: 'Scorta di sicurezza', riferimento: '-', quantita: -scortaSic, ordine: -1 });
+    elementi.push({ data: oggiISO_, tipo: 'Scorta di sicurezza', riferimento: '-', quantita: -scortaSic, ordine: -1, chiave: 'SS|-' });
   }
   if (mat.tipo === 'MP') {
     ordiniProduzione.filter(o => o.stato === 'aperto').forEach(o => {
       const comp = (o.componenti || []).find(c => c.codice === mat.codice);
-      if (comp) elementi.push({ data: o.dataPianificata || oggiISO, tipo: 'Fabbisogno dipendente (ODP)', riferimento: o.numero, quantita: -comp.qtaTotale, ordine: 0 });
+      if (comp) elementi.push({ data: o.dataPianificata || oggiISO_, tipo: 'Fabbisogno dipendente (ODP)', riferimento: o.numero, quantita: -comp.qtaTotale, ordine: 0, chiave: 'ODP|' + o.numero });
     });
     richiesteAcquisto.filter(r => r.materiale === mat.codice && r.stato === 'aperta').forEach(r => {
-      elementi.push({ data: r.dataRichiesta || oggiISO, tipo: "Richiesta d'acquisto", riferimento: r.numero, quantita: r.quantita, ordine: 0 });
+      elementi.push({ data: r.dataRichiesta || oggiISO_, tipo: "Richiesta d'acquisto", riferimento: r.numero, quantita: r.quantita, ordine: 0, chiave: 'RA|' + r.numero });
     });
     ordiniAcquisto.forEach(o => { o.righe.forEach(r => {
       if (r.materiale === mat.codice && !r._rimossa && !rigaCompleta(r)) {
-        elementi.push({ data: r.dataConsegna || oggiISO, tipo: "Ordine d'acquisto", riferimento: o.numero, quantita: Number(r.quantita) - rigaQtaRicevuta(r), ordine: 0 });
+        elementi.push({ data: r.dataConsegna || oggiISO_, tipo: "Ordine d'acquisto", riferimento: o.numero, quantita: Number(r.quantita) - rigaQtaRicevuta(r), ordine: 0, chiave: 'OA|' + o.numero });
       }
     }); });
+    (proposte || []).forEach((pr, i) => {
+      elementi.push({ data: pr.dataConsegna, tipo: "RA proposta (MRP, non salvata)", riferimento: 'MRP-' + (i+1), quantita: pr.qta, ordine: 0, chiave: 'PR|' + i, proposta: true });
+    });
   } else if (mat.tipo === 'PF') {
     ordiniVendita.forEach(o => {
       if (o.stato === 'evaso') return;
       (o.righe || []).forEach(r => {
         if (r.prodotto !== mat.codice) return;
         const residuo = Number(r.quantita) - Number(r.consegnato||0);
-        if (residuo > 0) elementi.push({ data: r.dataRichiesta || oggiISO, tipo: 'Ordine di vendita', riferimento: o.numero, quantita: -residuo, ordine: 0 });
+        if (residuo > 0) elementi.push({ data: r.dataRichiesta || oggiISO_, tipo: 'Ordine di vendita', riferimento: o.numero, quantita: -residuo, ordine: 0, chiave: 'OV|' + o.numero });
       });
     });
     ordiniProduzione.filter(o => o.stato === 'aperto' && o.prodotto === mat.codice).forEach(o => {
-      elementi.push({ data: o.dataPianificata || oggiISO, tipo: 'Ordine di produzione', riferimento: o.numero, quantita: o.quantita, ordine: 0 });
+      elementi.push({ data: o.dataPianificata || oggiISO_, tipo: 'Ordine di produzione', riferimento: o.numero, quantita: o.quantita, ordine: 0, chiave: 'OP|' + o.numero });
     });
   }
-  // ordina per data; a parità di data, giacenza iniziale e scorta di sicurezza restano in testa
   elementi.sort((a,b) => (a.data === b.data ? a.ordine - b.ordine : (a.data < b.data ? -1 : 1)));
   let run = 0;
   elementi.forEach(e => { run += e.quantita; e.disponibilitaCumulata = run; });
   return elementi;
 }
-function renderMD04(el) {
-  const mat = materiali.find(m => m.codice === draftMD04.materiale);
-  el.innerHTML = `
-    <div class="formwrap" style="padding-bottom:0;">
-      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Elenco disponibilità/fabbisogni di un singolo materiale: tutti i movimenti previsti (ordini di vendita, ordini di produzione, richieste e ordini d'acquisto) in ordine cronologico, con la disponibilità cumulata — solo visualizzazione, nessuna modifica da qui.</p>
-      <div class="formgrid">
-        <label>Materiale</label>
-        ${campoF4HTML('f-materiale-md04', mat ? materialeLabel(mat.codice) : '', '-- cerca materiale (F4) --')}
-      </div>
-    </div>
+function htmlTabellaMD04(mat, proposte) {
+  const eccez = mat.tipo === 'MP' ? eccezioniMRP(mat) : {};
+  const elementi = elementiMD04(mat, proposte);
+  return `
     <div class="tablewrap" style="margin-top:8px;">
-      ${!mat ? '<p style="font-size:11px;color:#9a9a8f;margin:10px;">Seleziona un materiale per vedere il suo elenco.</p>' : `
       <table>
-        <thead><tr><th>Data</th><th>Elemento MRP</th><th>Riferimento</th><th>Quantità</th><th>Disponibilità cumulata</th></tr></thead>
+        <thead><tr><th>Data</th><th>Elemento MRP</th><th>Riferimento</th><th>Quantità</th><th>Disponibilità cumulata</th><th>Messaggio di eccezione</th></tr></thead>
         <tbody>
-          ${elementiMD04(mat).map(e => `
-            <tr>
+          ${elementi.map(e => {
+            const ecc = e.proposta ? null : eccez[e.chiave];
+            return `<tr${e.proposta ? ' style="background:#eef4ff;"' : ''}>
               <td>${e.data}</td>
               <td>${e.tipo}</td>
               <td>${e.riferimento}</td>
               <td style="text-align:right; color:${e.quantita<0?'#a83232':'#1a6b2e'};">${e.quantita>0?'+':''}${e.quantita}</td>
               <td style="text-align:right; font-weight:600; color:${e.disponibilitaCumulata<0?'#a83232':'#1a1a1a'};">${e.disponibilitaCumulata}</td>
-            </tr>
-          `).join('')}
+              <td style="color:#a83232;">${ecc ? ecc.codice + ' – ' + ecc.testo : ''}</td>
+            </tr>`;
+          }).join('')}
         </tbody>
       </table>
-      `}
+    </div>`;
+}
+function renderMD04(el) {
+  const mat = materiali.find(m => m.codice === draftMD04.materiale);
+  const p = mat ? mrpParam(mat) : null;
+  el.innerHTML = `
+    <div class="formwrap" style="padding-bottom:0;">
+      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Elenco disponibilità/fabbisogni di un singolo materiale: tutti i movimenti previsti (ordini di vendita, ordini di produzione, richieste e ordini d'acquisto) in ordine cronologico, con la disponibilità cumulata e i messaggi di eccezione MRP (10 anticipare, 15 posticipare, 20 annullare, 96 scorta di sicurezza violata) — solo visualizzazione, nessuna modifica da qui.</p>
+      <div class="formgrid">
+        <label>Materiale</label>
+        ${campoF4HTML('f-materiale-md04', mat ? materialeLabel(mat.codice) : '', '-- cerca materiale (F4) --')}
+      </div>
+      ${p ? `<p style="font-size:10.5px; color:#5a6470; margin:8px 0 0 0;">Tipo MRP <strong>${p.tipo}</strong> · Politica <strong>${p.politica}</strong> · Scorta sic. <strong>${p.scortaSic}</strong> · Punto riordino <strong>${p.puntoRiord}</strong> · Lotto min <strong>${p.lottoMin}</strong> · Lotto max <strong>${p.lottoMax}</strong> · Multiplo <strong>${p.arrot}</strong> · T. consegna <strong>${p.tConsegna}</strong> gg · T. entrata merci <strong>${p.tEntrata}</strong> gg lav.</p>` : ''}
     </div>
+    ${!mat ? '<p style="font-size:11px;color:#9a9a8f;margin:10px;">Seleziona un materiale per vedere il suo elenco.</p>' : htmlTabellaMD04(mat, [])}
   `;
   collegaF4('f-materiale-md04', 'Cerca materiale', materiali.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
     draftMD04.materiale = valore;
@@ -3152,7 +3665,19 @@ function renderCOOIS(el) {
       const o = ordiniProduzione.find(x => x.numero === numero);
       if (!o) { confirmDeleteKey = null; renderScreenContent(); return; }
       let avviso = '';
-      if (o.stato === 'confermato') {
+      const cogiAperto = o.cogi ? erroriMovimenti.find(x => x.numero === o.cogi && x.stato === 'aperto') : null;
+      if (cogiAperto) {
+        // movimenti mai registrati (ancora in COGI): niente da stornare, si elimina la voce COGI
+        await eliminaRecord('erroriMovimenti', cogiAperto.numero);
+        erroriMovimenti = erroriMovimenti.filter(x => x.numero !== cogiAperto.numero);
+        avviso = ` Rimossa anche la voce COGI ${cogiAperto.numero} (nessun movimento da stornare).`;
+      } else if (o.stato === 'confermato') {
+        movimentazioni = await loadList('movimentazioni');
+        if (o.quantita > getGiacenzaLoc(o.prodotto, 'OFFICINA') && !(await negativoAmmesso(o.prodotto))) {
+          confirmDeleteKey = null;
+          setStatus(`Annullamento bloccato: il prodotto finito ${o.prodotto} non è più in OFFICINA in quantità sufficiente (${getGiacenzaLoc(o.prodotto, 'OFFICINA')} su ${o.quantita}): stornare la rimozione porterebbe la giacenza sotto zero.`, true);
+          renderScreenContent(); return;
+        }
         for (const c of o.componenti) {
           await registraMovimento({ materiale: c.codice, locazioneDa: null, locazioneA: 'OFFICINA', quantita: c.qtaTotale, causale: 'Storno annullamento produzione CO15 (' + numero + ')' });
         }
@@ -3168,7 +3693,7 @@ function renderCOOIS(el) {
       if (!storageOk) {
         setStatus(`⚠️ Ordine rimosso solo su questo dispositivo: il salvataggio sul server condiviso è fallito. Aggiornando la pagina potrebbe ricomparire. Riprova quando la connessione torna disponibile.`, true);
       } else {
-        setStatus(`Ordine di produzione ${numero} annullato.${o.stato==='confermato' ? ' Componenti riaccreditati in OFFICINA, prodotto finito rimosso.' : ''}${avviso}`);
+        setStatus(`Ordine di produzione ${numero} annullato.${(o.stato==='confermato' && !cogiAperto) ? ' Componenti riaccreditati in OFFICINA, prodotto finito rimosso.' : ''}${avviso}`);
       }
       renderMain();
     }));
@@ -3208,10 +3733,36 @@ function renderCO15(el) {
       const numero = btn.dataset.numero;
       const op = ordiniProduzione.find(o => o.numero === numero);
       if (!op) return;
-      const mancanti = op.componenti.filter(c => getGiacenzaLoc(c.codice, 'OFFICINA') < c.qtaTotale);
-      if (mancanti.length > 0) {
-        setStatus(`Evasione bloccata: materiale insufficiente in OFFICINA per ${mancanti.map(m=>m.codice).join(', ')}. Sposta il materiale da magazzino a officina.`, true);
-        return;
+      movimentazioni = await loadList('movimentazioni');
+      // Carenze: come in SAP (backflush), se manca materiale la conferma viene salvata ma i movimenti
+      // merci NON si registrano e finiscono in COGI (movimenti merci errati), da riprocessare dopo aver
+      // caricato il materiale. Fa eccezione il materiale con giacenza negativa ammessa (flag + interruttore).
+      const carenzeOP = [];
+      for (const c of op.componenti) {
+        const disp = getGiacenzaLoc(c.codice, 'OFFICINA');
+        if (disp < c.qtaTotale && !(await negativoAmmesso(c.codice))) carenzeOP.push({ materiale: c.codice, richiesto: c.qtaTotale, disponibile: disp, mancante: c.qtaTotale - Math.max(disp, 0) });
+      }
+      const negativiOP = op.componenti.filter(c => getGiacenzaLoc(c.codice, 'OFFICINA') < c.qtaTotale && !carenzeOP.some(x => x.materiale === c.codice)).map(c => c.codice);
+      if (carenzeOP.length > 0) {
+        const numCogi = await prossimoNumero('COGI');
+        const recCogi = {
+          numero: numCogi, ordine: numero, prodotto: op.prodotto, quantitaPF: op.quantita, stato: 'aperto',
+          righe: [...op.componenti.map(c => ({ tipo: 'consumo', materiale: c.codice, quantita: c.qtaTotale })), { tipo: 'carico', materiale: op.prodotto, quantita: op.quantita }],
+          mancanti: carenzeOP, messaggio: 'Quantità insufficiente in OFFICINA per ' + carenzeOP.map(x => x.materiale).join(', '),
+          creatoDa: currentUser, creatoIl: nowStr(),
+        };
+        await aggiungiRecord('erroriMovimenti', recCogi);
+        erroriMovimenti.push(recCogi);
+        const confermaCogi = nowStr();
+        const okCogi = await applicaPatch('ordiniProduzione', numero, { stato: 'confermato', confermatoDa: currentUser, confermatoIl: confermaCogi, dataEvasione: oggiISO, cogi: numCogi });
+        if (!okCogi) {
+          await eliminaRecord('erroriMovimenti', numCogi); erroriMovimenti = erroriMovimenti.filter(x => x.numero !== numCogi);
+          setStatus(`⚠️ Conferma di ${numero} NON salvata: connessione al server condiviso fallita. Riprova quando è più stabile.`, true);
+          renderMain(); return;
+        }
+        op.stato = 'confermato'; op.confermatoDa = currentUser; op.confermatoIl = confermaCogi; op.dataEvasione = oggiISO; op.cogi = numCogi;
+        setStatus(`Ordine ${numero} confermato, ma i movimenti merci NON sono stati registrati: materiale insufficiente in OFFICINA (${carenzeOP.map(x => `${x.materiale}: manca ${x.mancante}`).join('; ')}). Inseriti in COGI come ${numCogi}: carica il materiale e riprocessa.`, true);
+        renderMain(); return;
       }
       const dataEvasione = oggiISO;
       for (const c of op.componenti) {
@@ -3238,9 +3789,119 @@ function renderCO15(el) {
       op.confermatoDa = currentUser;
       op.confermatoIl = confermaIl;
       op.dataEvasione = dataEvasione;
-      setStatus(`Ordine di produzione ${numero} confermato (evaso il ${dataEvasione}): prodotto finito creato in OFFICINA.`);
+      setStatus(negativiOP.length ? `⚠️ Ordine ${numero} confermato con giacenza NEGATIVA in OFFICINA per ${negativiOP.join(', ')} (ammessa): verifica in ZMB01.` : `Ordine di produzione ${numero} confermato (evaso il ${dataEvasione}): prodotto finito creato in OFFICINA.`);
       renderMain();
     }));
+  });
+}
+
+
+// ============ COGI (movimenti merci errati della produzione) ============
+// Come in SAP: se alla conferma (CO15) manca materiale, l'ordine risulta confermato ma i movimenti merci
+// (scarico componenti + carico prodotto finito) non vengono registrati e restano qui in attesa.
+// Dopo aver caricato il materiale (MIGO / MB1C) si riprocessa la voce.
+let filtroCOGI = { mostraElaborati: false };
+let cogiDaEliminare = null; // conferma in pagina (niente confirm() nativo)
+async function riprocessaCOGI(numero) {
+  movimentazioni = await loadList('movimentazioni');
+  const c = erroriMovimenti.find(x => x.numero === numero);
+  if (!c || c.stato !== 'aperto') return { ok: false, msg: `${numero}: voce non trovata o già elaborata.` };
+  const carenze = [];
+  for (const r of c.righe.filter(x => x.tipo === 'consumo')) {
+    const disp = getGiacenzaLoc(r.materiale, 'OFFICINA');
+    if (disp < r.quantita && !(await negativoAmmesso(r.materiale))) carenze.push(`${r.materiale} (disponibile ${disp}, richiesto ${r.quantita})`);
+  }
+  if (carenze.length) return { ok: false, msg: `${numero}: quantità ancora insufficiente in OFFICINA — ${carenze.join('; ')}.` };
+  for (const r of c.righe) {
+    if (r.tipo === 'consumo') await registraMovimento({ materiale: r.materiale, locazioneDa: 'OFFICINA', locazioneA: null, quantita: r.quantita, causale: `Consumo produzione CO15 (${c.ordine}) [COGI ${c.numero}]` });
+    else await registraMovimento({ materiale: r.materiale, locazioneDa: null, locazioneA: 'OFFICINA', quantita: r.quantita, causale: `Produzione PF CO15 (${c.ordine}) [COGI ${c.numero}]` });
+  }
+  const ok = await applicaPatch('erroriMovimenti', numero, { stato: 'elaborato', elaboratoDa: currentUser, elaboratoIl: nowStr() });
+  c.stato = 'elaborato'; c.elaboratoDa = currentUser; c.elaboratoIl = nowStr();
+  return { ok: true, msg: `${numero} riprocessata: movimenti registrati per l'ordine ${c.ordine}.` + (ok ? '' : ' ⚠️ stato non salvato sul server condiviso.') };
+}
+function renderCOGI(el) {
+  const tutte = erroriMovimenti.slice().reverse();
+  const elenco = filtroCOGI.mostraElaborati ? tutte : tutte.filter(x => x.stato === 'aperto');
+  const nAperte = tutte.filter(x => x.stato === 'aperto').length;
+  el.innerHTML = `
+    <div class="actionrow"><button class="actionbtn" id="cogi-tutti" ${nAperte ? '' : 'disabled'}>↻ Riprocessa tutte le voci aperte (${nAperte})</button></div>
+    <div class="formwrap" style="padding-bottom:0;">
+      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Movimenti merci della produzione non registrati per giacenza insufficiente in OFFICINA. L'ordine di produzione risulta confermato, ma scarico componenti e carico prodotto finito restano in attesa. Carica il materiale mancante (MIGO, MB1C) e poi riprocessa. In alternativa, elimina la voce solo se il movimento non deve più essere registrato.</p>
+      <label style="font-size:11px;"><input type="checkbox" id="cogi-elab" ${filtroCOGI.mostraElaborati ? 'checked' : ''}> mostra anche le voci già elaborate</label>
+    </div>
+    <div class="tablewrap" style="margin-top:6px;">
+      <table>
+        <thead><tr><th>N. voce</th><th>Ordine</th><th>Prodotto</th><th>Qtà</th><th>Messaggio di errore</th><th>Mancante in OFFICINA</th><th>Utente</th><th>Data</th><th>Stato</th><th>Azioni</th></tr></thead>
+        <tbody>${elenco.length === 0 ? '<tr><td colspan="10" style="text-align:center;color:#1a6b2e;padding:16px;">Nessun movimento merci errato.</td></tr>' :
+          elenco.map(c => `<tr>
+            <td>${c.numero}</td><td>${c.ordine}</td><td>${materialeLabel(c.prodotto)}</td><td>${c.quantitaPF}</td>
+            <td style="color:#a83232;">${c.messaggio || ''}</td>
+            <td style="font-size:10.5px;">${(c.mancanti || []).map(m => `${m.materiale}: richiesto ${m.richiesto}, disp. ${getGiacenzaLoc(m.materiale, 'OFFICINA')}`).join('<br>')}</td>
+            <td>${c.creatoDa || ''}</td><td>${c.creatoIl || ''}</td>
+            <td>${c.stato === 'aperto' ? '<span style="color:#a83232;">❌ errato</span>' : '<span style="color:#1a6b2e;">✔ elaborato</span>'}</td>
+            <td>${c.stato === 'aperto' ? `<button class="actionbtn cogi-ripr" data-n="${c.numero}" style="padding:2px 8px;font-size:10.5px;">↻ Riprocessa</button> ${cogiDaEliminare === c.numero ? `<span class="rowaction cogi-del" data-n="${c.numero}" style="color:#a83232;cursor:pointer;font-weight:600;" title="I movimenti dell'ordine ${c.ordine} NON verranno mai registrati">⚠ conferma eliminazione</span>` : `<span class="rowaction cogi-del" data-n="${c.numero}" style="color:#a83232;cursor:pointer;">🗑</span>`}` : ''}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  document.getElementById('cogi-elab').addEventListener('change', e => { filtroCOGI.mostraElaborati = e.target.checked; renderScreenContent(); });
+  document.querySelectorAll('.cogi-ripr').forEach(b => b.addEventListener('click', () => withGuard(async () => {
+    const r = await riprocessaCOGI(b.dataset.n); setStatus(r.msg, !r.ok); renderMain();
+  })));
+  document.getElementById('cogi-tutti').addEventListener('click', () => withGuard(async () => {
+    let ok = 0, ko = 0;
+    for (const c of erroriMovimenti.filter(x => x.stato === 'aperto')) { const r = await riprocessaCOGI(c.numero); if (r.ok) ok++; else ko++; }
+    setStatus(`Riprocessate ${ok} voci; ${ko} ancora in errore (materiale ancora insufficiente).`, ko > 0); renderMain();
+  }));
+  document.querySelectorAll('.cogi-del').forEach(b => b.addEventListener('click', () => withGuard(async () => {
+    const c = erroriMovimenti.find(x => x.numero === b.dataset.n); if (!c) return;
+    if (cogiDaEliminare !== c.numero) { cogiDaEliminare = c.numero; renderScreenContent(); return; }
+    cogiDaEliminare = null;
+    await eliminaRecord('erroriMovimenti', c.numero);
+    erroriMovimenti = erroriMovimenti.filter(x => x.numero !== c.numero);
+    setStatus(`Voce ${c.numero} eliminata.`); renderMain();
+  })));
+}
+
+// ============ ZMB01 (custom: anomalie giacenze negative) ============
+function calcolaNegativi() {
+  const mov = movimentazioni; const stato = {}; const out = [];
+  mov.forEach((m, i) => {
+    [[m.locazioneA, m.quantita], [m.locazioneDa, -m.quantita]].forEach(([loc, q]) => {
+      if (!loc) return;
+      const k = m.materiale + '::' + loc; const e = stato[k] || (stato[k] = { materiale: m.materiale, loc, tot: 0, primo: null, ultimo: null });
+      const prima = e.tot; e.tot += q; e.ultimo = m;
+      if (prima >= 0 && e.tot < 0) e.primo = m;
+    });
+  });
+  Object.values(stato).forEach(e => { if (e.tot < 0) out.push(e); });
+  return out.sort((a, b) => a.tot - b.tot);
+}
+function renderZMB01(el) {
+  const neg = calcolaNegativi();
+  const perMat = {}; materiali.forEach(m => { const g = getGiacenza(m.codice); if (g < 0) perMat[m.codice] = g; });
+  const descr = m => m ? `${m.documento ? m.documento + ' · ' : ''}${m.causale || ''} · ${m.creatoDa || ''} · ${m.creatoIl || ''}` : '-';
+  const aperteCogi = erroriMovimenti.filter(x => x.stato === 'aperto').length;
+  el.innerHTML = `
+    <div class="actionrow"><button class="actionbtn" id="zmb01-csv">📥 Scarica report (CSV)</button></div>
+    <div class="formwrap" style="padding-bottom:0;">
+      <p style="font-size:11px;color:#5a6470;margin:0 0 6px 0;">Anomalie: materiale/ubicazione con giacenza <strong>negativa</strong>. Compaiono solo se per quel materiale la giacenza negativa è ammessa (flag in MM02 + interruttore del formatore) oppure per dati storici. Si correggono caricando la quantità mancante (MB1C 701, MIGO) o stornando il documento errato (MBST).</p>
+      <p id="zmb01-sw" style="font-size:11px;margin:0 0 6px 0;"></p>
+      ${aperteCogi ? `<p style="font-size:11px;color:#a83232;margin:0 0 6px 0;">⚠ Ci sono ${aperteCogi} voci aperte in COGI (movimenti di produzione non registrati).</p>` : ''}
+    </div>
+    <div class="tablewrap" style="margin-top:6px;">
+      <table>
+        <thead><tr><th>Materiale</th><th>Ubicazione</th><th>Giacenza</th><th>Totale materiale</th><th>Movimento che l'ha portata sotto zero</th><th>Ultimo movimento</th></tr></thead>
+        <tbody>${neg.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:#1a6b2e;padding:16px;">Nessuna giacenza negativa.</td></tr>' :
+          neg.map(e => `<tr><td>${materialeLabel(e.materiale)}</td><td>${e.loc}</td><td style="color:#a83232;font-weight:600;">${e.tot}</td><td>${getGiacenza(e.materiale)}</td><td style="font-size:10.5px;">${descr(e.primo)}</td><td style="font-size:10.5px;">${descr(e.ultimo)}</td></tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  giacenzaNegativaConsentita().then(v => { const x = document.getElementById('zmb01-sw'); if (x) x.innerHTML = `Interruttore generale del formatore: <strong style="color:${v ? '#a83232' : '#1a6b2e'};">${v ? 'giacenza negativa CONSENTITA' : 'giacenza negativa bloccata'}</strong>`; });
+  document.getElementById('zmb01-csv').addEventListener('click', () => {
+    esportaCSV('Giacenze_negative_' + isoDate(new Date()) + '.csv', ['Materiale','Ubicazione','Giacenza','Totale materiale','Movimento che ha causato lo scoperto','Ultimo movimento'],
+      neg.map(e => [materialeLabel(e.materiale), e.loc, e.tot, getGiacenza(e.materiale), descr(e.primo), descr(e.ultimo)]));
   });
 }
 
@@ -3344,9 +4005,9 @@ function renderME51N(el) {
     </div>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>N. richiesta</th><th>Materiale</th><th>Quantità</th><th>Data necessità</th><th>Origine</th><th>Stato</th><th>Creato da</th><th>Azioni</th></tr></thead>
-        <tbody>${richiesteAcquisto.length===0 ? '<tr><td colspan="8" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna richiesta d\'acquisto.</td></tr>' :
-          richiesteAcquisto.map(r => `<tr><td>${r.numero}</td><td>${materialeLabel(r.materiale)}</td><td>${r.quantita}</td><td>${r.dataRichiesta}</td><td>${r.origine}</td><td>${semaforoStatoOrdine(r.stato)}</td><td>${r.creatoDa}</td><td>${deleteActionCell('pr-'+r.numero, r.stato==='convertita' ? 'già convertita' : null)}</td></tr>`).join('')}
+        <thead><tr><th>N. richiesta</th><th>Materiale</th><th>Quantità</th><th>Data necessità</th><th>Data rilascio</th><th>Origine</th><th>Stato</th><th>Creato da</th><th>Azioni</th></tr></thead>
+        <tbody>${richiesteAcquisto.length===0 ? '<tr><td colspan="9" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna richiesta d\'acquisto.</td></tr>' :
+          richiesteAcquisto.map(r => `<tr><td>${r.numero}</td><td>${materialeLabel(r.materiale)}</td><td>${r.quantita}</td><td>${r.dataRichiesta}</td><td>${r.dataRilascio||'-'}</td><td>${r.origine}</td><td>${semaforoStatoOrdine(r.stato)}</td><td>${r.creatoDa}</td><td>${deleteActionCell('pr-'+r.numero, r.stato==='convertita' ? 'già convertita' : null)}</td></tr>`).join('')}
         </tbody>
       </table>
     </div>
@@ -3380,6 +4041,8 @@ function renderME51N(el) {
       setStatus('Compila materiale, quantità e data.', true); return;
     }
     richiesteAcquisto = await loadList('richiesteAcquisto');
+    const raGemella = richiesteAcquisto.find(r => r.stato === 'aperta' && r.materiale === draftPR.materiale && Number(r.quantita) === Number(draftPR.quantita) && r.dataRichiesta === draftPR.dataRichiesta);
+    if (raGemella) { setStatus(`Esiste già la richiesta aperta ${raGemella.numero} per lo stesso materiale, quantità e data: non salvata per evitare un duplicato.`, true); return; }
     const rec = {
       numero: await prossimoNumero('RA'), materiale: draftPR.materiale, quantita: Number(draftPR.quantita), dataRichiesta: draftPR.dataRichiesta,
       stato: 'aperta', origine: 'Manuale (ME51N)', creatoDa: currentUser, creatoIl: nowStr(),
@@ -3881,6 +4544,7 @@ function renderLS24(el) {
           <span class="rowaction ls24-chiudi-dettaglio">✕ chiudi</span>
         </div>
         <p style="font-size:10.5px; margin:2px 0;">Tipo: <strong>${matDettaglio.tipo==='MP'?'Materia Prima':'Prodotto Finito'}</strong> · UM: <strong>${matDettaglio.um}</strong> · Scorta minima: <strong>${matDettaglio.scortaMinima||0}</strong> · Scorta sicurezza: <strong>${matDettaglio.scortaSicurezza||0}</strong> · Punto riordino: <strong>${matDettaglio.puntoRiordino||0}</strong></p>
+        ${matDettaglio.tipo==='MP' ? `<p style="font-size:10.5px; margin:2px 0;">MRP: tipo <strong>${matDettaglio.tipoMRP||'PD'}</strong> · politica <strong>${matDettaglio.politicaLotto||'EX'}</strong> · lotto fisso <strong>${matDettaglio.lottoFisso||0}</strong> · lotto min <strong>${matDettaglio.lottoMin||0}</strong> · lotto max <strong>${matDettaglio.lottoMax||0}</strong> · livello max <strong>${matDettaglio.livelloMax||0}</strong> · multiplo <strong>${matDettaglio.arrotondamento||0}</strong> · t. consegna <strong>${matDettaglio.tempoConsegna||0}</strong> gg · t. entrata merci <strong>${matDettaglio.tempoEntrataMerci||0}</strong> gg lav.</p>` : ''}
         <p style="font-size:10.5px; margin:6px 0 2px 0;"><strong>Giacenza effettiva totale: ${totale}</strong> · In entrata (acquisti): ${inArrivoAcquisti} · In entrata (produzione): ${inArrivoProduzione} · In uscita (produzione): ${inUscitaProduzione} · In uscita (vendite): ${inUscitaVendite} · Giacenza proiettata: <strong style="color:${teorica<0?'#a83232':'#1a1a1a'};">${teorica}</strong></p>
         <p style="font-size:10.5px; margin:6px 0 2px 0;"><strong>Per ubicazione:</strong> ${perLoc.length===0 ? 'nessuna giacenza in nessuna ubicazione.' : perLoc.map(x => `${x.codice}: <strong>${x.q}</strong>`).join(' · ')}</p>
         <span class="rowaction ls24-vai-mb51" data-codice="${matDettaglio.codice}" style="margin-top:4px; display:inline-block;">📄 vedi movimenti di questo materiale (MB51)</span>
@@ -3998,61 +4662,257 @@ function renderLocazioni(el) {
   }));
 }
 
-// ============ Movimentazione materiale tra ubicazioni ============
-function renderMovStock(el) {
+// ============ Documenti materiale (MB1A / MB1B / MB1C / MBST) — stile SAP ============
+// Ogni registrazione crea un DOCUMENTO MATERIALE (numero DM-xxxx) con testata (tipo movimento, data documento,
+// data di registrazione, testo di testata, riferimento) e una o più righe. La giacenza resta calcolata dai movimenti.
+const MOVIMENTI_SAP = {
+  '311': { desc:'Trasferimento tra ubicazioni', trans:'MB1B', da:true, a:true },
+  '309': { desc:'Trasferimento da materiale a materiale', trans:'MB1B', da:true, a:true, mat2:true },
+  '551': { desc:'Uscita per rottamazione', trans:'MB1A', da:true, a:false },
+  '122': { desc:'Reso a fornitore', trans:'MB1A', da:true, a:false },
+  '702': { desc:'Differenza inventariale in meno', trans:'MB1A', da:true, a:false },
+  '501': { desc:'Entrata merci senza ordine', trans:'MB1C', da:false, a:true },
+  '561': { desc:'Carico iniziale giacenza', trans:'MB1C', da:false, a:true },
+  '701': { desc:'Differenza inventariale in più', trans:'MB1C', da:false, a:true },
+  // movimenti di storno (si generano solo da MBST)
+  '312': { desc:'Storno trasferimento tra ubicazioni', trans:null }, '310': { desc:'Storno trasferimento materiale a materiale', trans:null },
+  '552': { desc:'Storno uscita per rottamazione', trans:null }, '123': { desc:'Storno reso a fornitore', trans:null },
+  '502': { desc:'Storno entrata merci senza ordine', trans:null }, '562': { desc:'Storno carico iniziale', trans:null },
+};
+const STORNO_DI = { '311':'312', '309':'310', '551':'552', '122':'123', '702':'701', '501':'502', '561':'562', '701':'702' };
+const TITOLO_TRANS_MB = { MB1A: 'MB1A: Uscita merci', MB1B: 'MB1B: Trasferimento merci', MB1C: 'MB1C: Altre entrate merci' };
+
+let draftMB = {};
+let ultimoDocumentoMB = null; // { trans, doc }
+// ordine esplicito (le chiavi numeriche di un oggetto verrebbero riordinate: 309 prima di 311)
+const ORDINE_MOV_SAP = ['311','309','551','122','702','501','561','701'];
+function tipiMB(trans) { return ORDINE_MOV_SAP.filter(k => MOVIMENTI_SAP[k].trans === trans); }
+function nuovaRigaMB() { return { materiale:'', materiale2:'', locDa:'', locA:'', qta:'1', testo:'' }; }
+function datiMB(trans) {
+  if (!draftMB[trans]) {
+    const primo = tipiMB(trans)[0];
+    draftMB[trans] = { tipoMov: primo, dataDoc: oggiISO(), dataReg: oggiISO(), testo: '', rif: '', righe: [nuovaRigaMB()] };
+  }
+  return draftMB[trans];
+}
+// Ritorna l'elenco delle carenze (materiale/ubicazione dove il prelievo supera il disponibile)
+function carenzeMB(tipoMov, righe) {
+  const def = MOVIMENTI_SAP[tipoMov];
+  if (!def.da) return [];
+  const richiesto = {};
+  righe.forEach(r => { const k = r.materiale + '::' + r.locDa; richiesto[k] = (richiesto[k] || 0) + Number(r.qta); });
+  const out = [];
+  for (const k of Object.keys(richiesto)) {
+    const [mat, loc] = k.split('::');
+    const disp = getGiacenzaLoc(mat, loc);
+    if (richiesto[k] > disp) out.push({ mat, loc, disp, rich: richiesto[k] });
+  }
+  return out;
+}
+// Tra le carenze, quelle che BLOCCANO (materiale senza flag di giacenza negativa o interruttore spento)
+async function carenzeBloccanti(carenze) {
+  const out = [];
+  for (const c of carenze) if (!(await negativoAmmesso(c.mat))) out.push(c);
+  return out;
+}
+function msgCarenza(c) { return `Quantità insufficiente: ${c.mat} nell'ubicazione ${c.loc} — disponibile ${c.disp}, richiesto ${c.rich}. Il documento non è stato registrato.`; }
+async function registraDocumentoMateriale(tipoMov, head, righe, trans, extraDoc) {
+  const doc = await prossimoNumero('DM');
+  const def = MOVIMENTI_SAP[tipoMov];
+  const base = { documento: doc, tipoMov, trans, dataDocumento: head.dataDoc, dataRegistrazione: head.dataReg, testoTestata: head.testo || '', riferimento: head.rif || '', ...(extraDoc || {}) };
+  const causale = `${tipoMov} ${def.desc}`;
+  let n = 0;
+  for (const r of righe) {
+    n++;
+    if (tipoMov === '309') {
+      await registraMovimento({ materiale: r.materiale, locazioneDa: r.locDa, locazioneA: null, quantita: Number(r.qta), causale: causale + ' [−]', extra: { ...base, riga: n, testoRiga: r.testo || '', materialeControparte: r.materiale2 } });
+      await registraMovimento({ materiale: r.materiale2, locazioneDa: null, locazioneA: r.locA, quantita: Number(r.qta), causale: causale + ' [+]', extra: { ...base, riga: n, testoRiga: r.testo || '', materialeControparte: r.materiale } });
+    } else {
+      await registraMovimento({ materiale: r.materiale, locazioneDa: def.da ? r.locDa : null, locazioneA: def.a ? r.locA : null, quantita: Number(r.qta), causale, extra: { ...base, riga: n, testoRiga: r.testo || '' } });
+    }
+  }
+  return doc;
+}
+
+function renderMovimentoMateriale(el, trans) {
+  const d = datiMB(trans);
+  const tipi = tipiMB(trans);
+  const def = MOVIMENTI_SAP[d.tipoMov];
+  const descr = { MB1B: 'Trasferimento di materiale tra ubicazioni (311) o da un materiale a un altro (309).', MB1A: 'Uscita di materiale dal magazzino: rottamazione (551), reso a fornitore (122), differenza inventariale in meno (702).', MB1C: 'Entrate di materiale senza ordine d\'acquisto: entrata senza ordine (501), carico iniziale (561), differenza inventariale in più (701).' }[trans];
+  const ub = l => l ? `${l} - ${(locazioni.find(x => x.codice === l) || {}).descrizione || ''}` : '';
+  const righeHTML = d.righe.map((r, i) => {
+    const m = materiali.find(x => x.codice === r.materiale);
+    const disp = (def.da && r.materiale && r.locDa) ? getGiacenzaLoc(r.materiale, r.locDa) : null;
+    return `<tr>
+      <td>${i + 1}</td>
+      <td>${campoF4HTML('mb-mat-' + i, r.materiale ? materialeLabel(r.materiale) : '', 'materiale (F4)')}</td>
+      ${def.mat2 ? `<td>${campoF4HTML('mb-mat2-' + i, r.materiale2 ? materialeLabel(r.materiale2) : '', 'materiale destinazione (F4)')}</td>` : ''}
+      <td>${def.da ? campoF4HTML('mb-da-' + i, ub(r.locDa), 'ubicazione (F4)') : '<span style="color:#9a9a8f;">—</span>'}</td>
+      <td>${def.a ? campoF4HTML('mb-a-' + i, ub(r.locA), 'ubicazione (F4)') : '<span style="color:#9a9a8f;">—</span>'}</td>
+      <td><input id="mb-qta-${i}" type="number" min="1" step="1" value="${r.qta}" style="width:70px;"></td>
+      <td>${m ? m.um : ''}</td>
+      <td style="text-align:right;">${disp === null ? '' : `<span style="color:${Number(r.qta) > disp ? '#a83232' : '#1a1a1a'};">${disp}</span>`}</td>
+      <td><input id="mb-testo-${i}" maxlength="50" value="${(r.testo || '').replace(/"/g, '&quot;')}" style="width:140px;"></td>
+      <td>${d.righe.length > 1 ? `<span class="rowaction mb-del" data-i="${i}">✕</span>` : ''}</td>
+    </tr>`;
+  }).join('');
   el.innerHTML = `
-    <div class="formwrap" style="padding-bottom:0;">
-      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Sposta materiale tra ubicazioni. Es. da RICEZIONE a un'ubicazione di magazzino, poi da lì a OFFICINA prima che un ordine di produzione possa consumarlo; il prodotto finito va spostato da OFFICINA a SPEDIZIONE prima della consegna.</p>
+    <div class="actionrow">
+      <button class="actionbtn" id="mb-save">✔ Registra documento</button>
+      <button class="actionbtn" id="mb-add">+ Aggiungi riga</button>
+      <button class="actionbtn" id="mb-clear">🗑 Svuota</button>
     </div>
-    <div class="actionrow"><button class="actionbtn" id="save-mov">✔ Registra movimento</button></div>
-    <div class="formwrap">
-      <div class="formgrid">
-        <label>Materiale</label>
-        ${campoF4HTML('f-materiale', draftMov.materiale ? materialeLabel(draftMov.materiale) : '', '-- cerca materiale (F4) --')}
-        <label>Ubicazione di partenza</label>
-        ${campoF4HTML('f-locda', draftMov.locazioneDa ? `${draftMov.locazioneDa} - ${(locazioni.find(l=>l.codice===draftMov.locazioneDa)||{}).descrizione||''} (disp. ${draftMov.materiale ? getGiacenzaLoc(draftMov.materiale, draftMov.locazioneDa) : '-'})` : '', '-- cerca ubicazione (F4) --')}
-        <label>Ubicazione di arrivo</label>
-        ${campoF4HTML('f-loca', draftMov.locazioneA ? `${draftMov.locazioneA} - ${(locazioni.find(l=>l.codice===draftMov.locazioneA)||{}).descrizione||''}` : '', '-- cerca ubicazione (F4) --')}
-        <label>Quantità</label><input id="f-qta" type="number" min="1" value="${draftMov.quantita}">
-        <label>Causale</label>
-        <select id="f-causale">
-          ${CAUSALI_MOVIMENTO.map(c => `<option value="${c}" ${draftMov.causale===c?'selected':''}>${c}</option>`).join('')}
-        </select>
+    <div class="formwrap" style="padding-bottom:0;">
+      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">${descr} Ogni registrazione crea un <strong>documento materiale</strong> (DM-xxxx) con più righe; la giacenza non può diventare negativa (come in SAP: "quantità insufficiente"). Per annullare un documento usa MBST.</p>
+      ${ultimoDocumentoMB && ultimoDocumentoMB.trans === trans ? `<p style="font-size:11px; margin:0 0 8px 0; padding:6px 8px; background:#e8f4e8; border:1px solid #9fc79f;">✔ Registrato il documento materiale <strong>${ultimoDocumentoMB.doc}</strong> — <span class="rowaction mb-stampa" data-doc="${ultimoDocumentoMB.doc}">🖶 stampa documento</span></p>` : ''}
+      <div class="formgrid" style="max-width:640px;">
+        <label>Tipo di movimento</label>
+        <select id="mb-tipo">${tipi.map(k => `<option value="${k}" ${d.tipoMov === k ? 'selected' : ''}>${k} - ${MOVIMENTI_SAP[k].desc}</option>`).join('')}</select>
+        <label>Data documento</label><input id="mb-datadoc" type="date" value="${d.dataDoc}">
+        <label>Data di registrazione</label><input id="mb-datareg" type="date" value="${d.dataReg}">
+        <label>Testo di testata</label><input id="mb-testo-t" maxlength="25" value="${(d.testo || '').replace(/"/g, '&quot;')}" placeholder="max 25 caratteri">
+        <label>Riferimento</label><input id="mb-rif" maxlength="16" value="${(d.rif || '').replace(/"/g, '&quot;')}" placeholder="es. n. bolla interna">
       </div>
-      ${draftMov.materiale && draftMov.locazioneDa ? `<p style="font-size:11px; margin-top:8px;">Disponibile in ${draftMov.locazioneDa}: <strong>${getGiacenzaLoc(draftMov.materiale, draftMov.locazioneDa)}</strong>${Number(draftMov.quantita) > getGiacenzaLoc(draftMov.materiale, draftMov.locazioneDa) ? ` <span style="color:#a83232;">⚠ quantità superiore al disponibile: la giacenza risulterà negativa (comunque consentito, per scopi didattici)</span>` : ''}</p>` : ''}
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Riga</th><th>Materiale${def.mat2 ? ' (partenza)' : ''}</th>${def.mat2 ? '<th>Materiale (destinazione)</th>' : ''}<th>${def.da ? 'Ubicazione di prelievo' : 'Ubic. di prelievo'}</th><th>${def.a ? 'Ubicazione di ricezione' : 'Ubic. di ricezione'}</th><th>Quantità</th><th>UM</th><th>Disponibile</th><th>Testo riga</th><th></th></tr></thead>
+        <tbody>${righeHTML}</tbody>
+      </table>
     </div>
   `;
-  collegaF4('f-materiale', 'Cerca materiale', materiali.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
-    draftMov.materiale = valore;
-    renderScreenContent();
+  d.righe.forEach((r, i) => {
+    collegaF4('mb-mat-' + i, 'Cerca materiale', materiali.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), v => { r.materiale = v; renderScreenContent(); });
+    if (def.mat2) collegaF4('mb-mat2-' + i, 'Cerca materiale di destinazione', materiali.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), v => { r.materiale2 = v; renderScreenContent(); });
+    if (def.da) collegaF4('mb-da-' + i, 'Cerca ubicazione di prelievo', locazioni.map(l => ({ value: l.codice, label: `${l.codice} - ${l.descrizione}${r.materiale ? ` (disp. ${getGiacenzaLoc(r.materiale, l.codice)})` : ''}` })), v => { r.locDa = v; renderScreenContent(); });
+    if (def.a) collegaF4('mb-a-' + i, 'Cerca ubicazione di ricezione', locazioni.map(l => ({ value: l.codice, label: `${l.codice} - ${l.descrizione}` })), v => { r.locA = v; renderScreenContent(); });
+    const q = document.getElementById('mb-qta-' + i); if (q) q.addEventListener('input', e => { r.qta = e.target.value; });
+    if (q) q.addEventListener('change', () => renderScreenContent());
+    const t = document.getElementById('mb-testo-' + i); if (t) t.addEventListener('input', e => { r.testo = e.target.value; });
   });
-  collegaF4('f-locda', 'Cerca ubicazione di partenza', locazioni.map(l => ({ value: l.codice, label: `${l.codice} - ${l.descrizione} (disp. ${draftMov.materiale ? getGiacenzaLoc(draftMov.materiale, l.codice) : '-'})` })), (valore) => {
-    draftMov.locazioneDa = valore;
-    renderScreenContent();
-  });
-  collegaF4('f-loca', 'Cerca ubicazione di arrivo', locazioni.map(l => ({ value: l.codice, label: `${l.codice} - ${l.descrizione}` })), (valore) => {
-    draftMov.locazioneA = valore;
-    renderScreenContent();
-  });
-  document.getElementById('f-qta').addEventListener('input', e => draftMov.quantita = e.target.value);
-  document.getElementById('f-causale').addEventListener('change', e => draftMov.causale = e.target.value);
-  document.getElementById('save-mov').addEventListener('click', () => withGuard(async () => {
-    if (!draftMov.materiale || !draftMov.locazioneDa || !draftMov.locazioneA) { setStatus('Seleziona materiale, ubicazione di partenza e di arrivo.', true); return; }
-    if (draftMov.locazioneDa === draftMov.locazioneA) { setStatus('Ubicazione di partenza e arrivo devono essere diverse.', true); return; }
-    const qta = Number(draftMov.quantita);
-    if (!qta || qta <= 0) { setStatus('Inserisci una quantità maggiore di zero.', true); return; }
-    const disponibile = getGiacenzaLoc(draftMov.materiale, draftMov.locazioneDa);
-    const risultatoNegativo = qta > disponibile;
-    await registraMovimento({ materiale: draftMov.materiale, locazioneDa: draftMov.locazioneDa, locazioneA: draftMov.locazioneA, quantita: qta, causale: draftMov.causale });
-    if (risultatoNegativo) {
-      setStatus(`⚠️ Movimento registrato, ma in ${draftMov.locazioneDa} erano disponibili solo ${disponibile}: la giacenza di ${draftMov.materiale} in quella ubicazione è ora NEGATIVA (${disponibile - qta}). Verificala in LS24/MMBE.`, true);
-    } else {
-      setStatus(`Spostati ${qta} ${draftMov.materiale} da ${draftMov.locazioneDa} a ${draftMov.locazioneA}.`);
+  document.getElementById('mb-tipo').addEventListener('change', e => { d.tipoMov = e.target.value; renderScreenContent(); });
+  document.getElementById('mb-datadoc').addEventListener('input', e => { d.dataDoc = e.target.value; });
+  document.getElementById('mb-datareg').addEventListener('input', e => { d.dataReg = e.target.value; });
+  document.getElementById('mb-testo-t').addEventListener('input', e => { d.testo = e.target.value; });
+  document.getElementById('mb-rif').addEventListener('input', e => { d.rif = e.target.value; });
+  document.getElementById('mb-add').addEventListener('click', () => { d.righe.push(nuovaRigaMB()); renderScreenContent(); });
+  document.getElementById('mb-clear').addEventListener('click', () => { draftMB[trans] = null; ultimoDocumentoMB = null; renderScreenContent(); });
+  document.querySelectorAll('.mb-del').forEach(x => x.addEventListener('click', () => { d.righe.splice(Number(x.dataset.i), 1); renderScreenContent(); }));
+  const st = document.querySelector('.mb-stampa'); if (st) st.addEventListener('click', () => stampaDocumentoMateriale(st.dataset.doc));
+  document.getElementById('mb-save').addEventListener('click', () => withGuard(async () => {
+    if (!d.dataDoc || !d.dataReg) { setStatus('Inserisci data documento e data di registrazione.', true); return; }
+    if (d.righe.length === 0) { setStatus('Il documento non ha righe.', true); return; }
+    for (let i = 0; i < d.righe.length; i++) {
+      const r = d.righe[i]; const n = i + 1; const qta = Number(r.qta);
+      if (!r.materiale) { setStatus(`Riga ${n}: seleziona il materiale.`, true); return; }
+      if (def.mat2 && !r.materiale2) { setStatus(`Riga ${n}: seleziona il materiale di destinazione.`, true); return; }
+      if (def.da && !r.locDa) { setStatus(`Riga ${n}: seleziona l'ubicazione di prelievo.`, true); return; }
+      if (def.a && !r.locA) { setStatus(`Riga ${n}: seleziona l'ubicazione di ricezione.`, true); return; }
+      if (!qta || qta <= 0 || !Number.isInteger(qta)) { setStatus(`Riga ${n}: la quantità deve essere un numero intero maggiore di zero.`, true); return; }
+      if (d.tipoMov === '311' && r.locDa === r.locA) { setStatus(`Riga ${n}: nel movimento 311 le ubicazioni di prelievo e di ricezione devono essere diverse.`, true); return; }
+      if (d.tipoMov === '309' && r.materiale === r.materiale2 && r.locDa === r.locA) { setStatus(`Riga ${n}: nel movimento 309 materiale e ubicazione di partenza e destinazione coincidono.`, true); return; }
     }
-    draftMov.quantita = '1';
+    movimentazioni = await loadList('movimentazioni');
+    const carenze = carenzeMB(d.tipoMov, d.righe);
+    const bloccanti = await carenzeBloccanti(carenze);
+    if (bloccanti.length) { setStatus(msgCarenza(bloccanti[0]), true); renderScreenContent(); return; }
+    const errore = carenze.length > 0;
+    const doc = await registraDocumentoMateriale(d.tipoMov, d, d.righe, trans);
+    ultimoDocumentoMB = { trans, doc };
+    setStatus(errore ? `⚠️ Documento materiale ${doc} registrato con giacenza NEGATIVA (consentita dal formatore): verifica in LS24/MMBE.` : `Documento materiale ${doc} registrato (movimento ${d.tipoMov}, ${d.righe.length} riga/e).`);
+    draftMB[trans] = { tipoMov: d.tipoMov, dataDoc: oggiISO(), dataReg: oggiISO(), testo: '', rif: '', righe: [nuovaRigaMB()] };
     renderMain();
   }));
 }
+
+function documentiMateriale() {
+  const per = {};
+  movimentazioni.forEach(m => { if (m.documento) { (per[m.documento] = per[m.documento] || []).push(m); } });
+  const stornati = new Set(movimentazioni.filter(m => m.stornoDi).map(m => m.stornoDi));
+  return Object.keys(per).map(numero => {
+    const righe = per[numero]; const t = righe[0];
+    return { numero, tipoMov: t.tipoMov, trans: t.trans, dataReg: t.dataRegistrazione, dataDoc: t.dataDocumento, testo: t.testoTestata, rif: t.riferimento, creatoDa: t.creatoDa, righe,
+      stornoDi: t.stornoDi || null, stornato: stornati.has(numero) };
+  }).sort((a,b) => a.numero < b.numero ? 1 : -1);
+}
+function stampaDocumentoMateriale(numero) {
+  const doc = documentiMateriale().find(x => x.numero === numero);
+  if (!doc) { setStatus('Documento materiale non trovato.', true); return; }
+  const def = MOVIMENTI_SAP[doc.tipoMov] || { desc: '' };
+  stampaDocumento(`
+    <h2 style="margin:0 0 4px 0;">Documento materiale ${doc.numero}</h2>
+    <p style="margin:0 0 12px 0; color:#666; font-size:12px;">Movimento ${doc.tipoMov} — ${def.desc}${doc.stornoDi ? ` (storno del documento ${doc.stornoDi})` : ''}</p>
+    <p style="margin:2px 0;"><strong>Data documento:</strong> ${doc.dataDoc || '-'} · <strong>Data registrazione:</strong> ${doc.dataReg || '-'}</p>
+    <p style="margin:2px 0;"><strong>Testo testata:</strong> ${doc.testo || '-'} · <strong>Riferimento:</strong> ${doc.rif || '-'}</p>
+    <p style="margin:2px 0 10px 0;"><strong>Registrato da:</strong> ${doc.creatoDa || '-'}</p>
+    <table style="width:100%; border-collapse:collapse; font-size:12px;">
+      <thead><tr><th style="text-align:left; border-bottom:1px solid #999; padding:4px;">Riga</th><th style="text-align:left; border-bottom:1px solid #999; padding:4px;">Materiale</th><th style="text-align:left; border-bottom:1px solid #999; padding:4px;">Da</th><th style="text-align:left; border-bottom:1px solid #999; padding:4px;">A</th><th style="text-align:right; border-bottom:1px solid #999; padding:4px;">Quantità</th><th style="text-align:left; border-bottom:1px solid #999; padding:4px;">Testo</th></tr></thead>
+      <tbody>${doc.righe.map(r => `<tr><td style="padding:4px; border-bottom:1px solid #ddd;">${r.riga || ''}</td><td style="padding:4px; border-bottom:1px solid #ddd;">${materialeLabel(r.materiale)}</td><td style="padding:4px; border-bottom:1px solid #ddd;">${r.locazioneDa || '-'}</td><td style="padding:4px; border-bottom:1px solid #ddd;">${r.locazioneA || '-'}</td><td style="padding:4px; border-bottom:1px solid #ddd; text-align:right;">${r.quantita}</td><td style="padding:4px; border-bottom:1px solid #ddd;">${r.testoRiga || ''}</td></tr>`).join('')}</tbody>
+    </table>
+  `);
+}
+
+// ============ MBST (storno documento materiale) ============
+let draftMBST = { documento: '', dataReg: '' };
+function renderMBST(el) {
+  const tutti = documentiMateriale();
+  const stornabili = tutti.filter(x => !x.stornoDi && !x.stornato);
+  const doc = tutti.find(x => x.numero === draftMBST.documento);
+  if (!draftMBST.dataReg) draftMBST.dataReg = oggiISO();
+  el.innerHTML = `
+    <div class="actionrow"><button class="actionbtn" id="mbst-storna">↩ Storna documento</button></div>
+    <div class="formwrap">
+      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Annulla un documento materiale registrato con MB1A, MB1B o MB1C generando un documento di storno con i movimenti inversi (312, 310, 552, 123, 502, 562, 701/702). Un documento già stornato, o che è a sua volta uno storno, non si può stornare. Se la merce è già stata spostata o consumata e la quantità da rimuovere non è più disponibile, lo storno viene rifiutato. I ricevimenti da ordine (MIGO) e i movimenti di produzione non si stornano da qui.</p>
+      <div class="formgrid" style="max-width:640px;">
+        <label>Documento materiale</label>
+        ${campoF4HTML('mbst-doc', doc ? `${doc.numero} — ${doc.tipoMov} ${(MOVIMENTI_SAP[doc.tipoMov] || {}).desc || ''}` : '', '-- cerca documento (F4) --')}
+        <label>Data di registrazione storno</label><input id="mbst-data" type="date" value="${draftMBST.dataReg}">
+      </div>
+      ${stornabili.length === 0 ? '<p style="font-size:11px;color:#9a9a8f;margin-top:8px;">Nessun documento materiale stornabile (i documenti si creano con MB1A/MB1B/MB1C).</p>' : ''}
+      ${doc ? `
+        <p style="font-size:11px; margin:10px 0 4px 0;"><strong>${doc.numero}</strong> — ${doc.tipoMov} ${(MOVIMENTI_SAP[doc.tipoMov] || {}).desc || ''} · data registrazione ${doc.dataReg || '-'} · testo "${doc.testo || ''}" · registrato da ${doc.creatoDa || '-'}${doc.stornato ? ' · <strong style="color:#a83232;">già stornato</strong>' : ''}${doc.stornoDi ? ` · <strong style="color:#a83232;">è uno storno del ${doc.stornoDi}</strong>` : ''}</p>
+        <div class="tablewrap" style="margin:0;"><table>
+          <thead><tr><th>Riga</th><th>Materiale</th><th>Da</th><th>A</th><th>Quantità</th></tr></thead>
+          <tbody>${doc.righe.map(r => `<tr><td>${r.riga || ''}</td><td>${materialeLabel(r.materiale)}</td><td>${r.locazioneDa || '-'}</td><td>${r.locazioneA || '-'}</td><td>${r.quantita}</td></tr>`).join('')}</tbody>
+        </table></div>
+        <p style="margin-top:6px;"><span class="rowaction mbst-stampa" data-doc="${doc.numero}">🖶 stampa documento</span></p>` : ''}
+    </div>
+  `;
+  collegaF4('mbst-doc', 'Cerca documento materiale', tutti.map(x => ({ value: x.numero, label: `${x.numero} — ${x.tipoMov} ${(MOVIMENTI_SAP[x.tipoMov] || {}).desc || ''} (${x.dataReg || '-'})${x.stornato ? ' [stornato]' : ''}${x.stornoDi ? ' [storno]' : ''}` })), v => { draftMBST.documento = v; renderScreenContent(); });
+  document.getElementById('mbst-data').addEventListener('input', e => { draftMBST.dataReg = e.target.value; });
+  const st = document.querySelector('.mbst-stampa'); if (st) st.addEventListener('click', () => stampaDocumentoMateriale(st.dataset.doc));
+  document.getElementById('mbst-storna').addEventListener('click', () => withGuard(async () => {
+    if (!draftMBST.documento) { setStatus('Seleziona il documento materiale da stornare.', true); return; }
+    movimentazioni = await loadList('movimentazioni');
+    const d = documentiMateriale().find(x => x.numero === draftMBST.documento);
+    if (!d) { setStatus('Documento materiale non trovato.', true); return; }
+    if (d.stornoDi) { setStatus(`Il documento ${d.numero} è già uno storno e non si può stornare.`, true); return; }
+    if (d.stornato) { setStatus(`Il documento ${d.numero} è già stato stornato.`, true); return; }
+    const tipoRev = STORNO_DI[d.tipoMov];
+    if (!tipoRev) { setStatus(`Il movimento ${d.tipoMov} non è stornabile da MBST.`, true); return; }
+    // disponibilità: ciò che il documento ha messo in un'ubicazione deve poterne essere tolto
+    const richiesto = {};
+    d.righe.forEach(r => { if (r.locazioneA) { const k = r.materiale + '::' + r.locazioneA; richiesto[k] = (richiesto[k] || 0) + Number(r.quantita); } });
+    for (const k of Object.keys(richiesto)) {
+      const [mat, loc] = k.split('::'); const disp = getGiacenzaLoc(mat, loc);
+      if (richiesto[k] > disp && !(await negativoAmmesso(mat))) { setStatus(`Storno impossibile: ${mat} nell'ubicazione ${loc} — disponibile ${disp}, da stornare ${richiesto[k]} (la merce è già stata spostata o consumata).`, true); return; }
+    }
+    const head = { dataDoc: draftMBST.dataReg || oggiISO(), dataReg: draftMBST.dataReg || oggiISO(), testo: 'Storno ' + d.numero, rif: d.numero };
+    const doc = await prossimoNumero('DM');
+    let n = 0;
+    for (const r of d.righe) {
+      n++;
+      await registraMovimento({ materiale: r.materiale, locazioneDa: r.locazioneA || null, locazioneA: r.locazioneDa || null, quantita: Number(r.quantita),
+        causale: `${tipoRev} ${MOVIMENTI_SAP[tipoRev].desc} (doc. ${d.numero})`,
+        extra: { documento: doc, tipoMov: tipoRev, trans: 'MBST', dataDocumento: head.dataDoc, dataRegistrazione: head.dataReg, testoTestata: head.testo, riferimento: head.rif, riga: r.riga || n, stornoDi: d.numero } });
+    }
+    ultimoDocumentoMB = null; draftMBST = { documento: '', dataReg: '' };
+    setStatus(`Documento ${d.numero} stornato con il documento ${doc} (movimento ${tipoRev}).`);
+    renderMain();
+  }));
+}
+
+
 
 // ============ Elenco movimentazioni (MB51) ============
 function tipoMovimento(m) {
@@ -4093,6 +4953,8 @@ function renderMovList(el) {
 
   const colonne = [
     { campo:'numero', label:'N. movimento' },
+    { campo:'documento', label:'Doc. materiale', get:m=>m.documento||'-' },
+    { campo:'tipoMov', label:'Tp.mov.', get:m=>m.tipoMov||'-' },
     { campo:'materiale', label:'Materiale', get:m=>materialeLabel(m.materiale) },
     { campo:'tipo', label:'Tipo' },
     { campo:'locazioneDa', label:'Da', get:m=>m.locazioneDa||'-' },
@@ -4142,13 +5004,16 @@ function renderMovList(el) {
             // che rispetti l'esatto formato "(numero, DDT ...)" a fine stringa — così un formato
             // leggermente diverso (dati storici, o modifiche future alla causale) non fa più
             // sparire il pulsante di stampa.
-            const stampaCell = /^Ricevimento MIGO/.test(m.causale||'') ? `<span class="print-btn stampa-ric-mb51" data-movimento="${m.numero}">🖶 stampa</span>` : '';
-            return `<tr><td>${m.numero}</td><td>${materialeLabel(m.materiale)}</td><td>${m.tipo}</td><td>${m.locazioneDa||'-'}</td><td>${m.locazioneA||'-'}</td><td>${m.quantita}</td><td>${m.controparte||'-'}</td><td>${m.causale}</td><td>${m.creatoIl}</td><td>${m.creatoDa}</td><td>${stampaCell}</td></tr>`;
+            const stampaCell = m.documento ? `<span class="print-btn stampa-doc-mb51" data-documento="${m.documento}">🖶 stampa doc.</span>` : /^Ricevimento MIGO/.test(m.causale||'') ? `<span class="print-btn stampa-ric-mb51" data-movimento="${m.numero}">🖶 stampa</span>` : '';
+            return `<tr><td>${m.numero}</td><td>${m.documento||'-'}</td><td>${m.tipoMov||'-'}</td><td>${materialeLabel(m.materiale)}</td><td>${m.tipo}</td><td>${m.locazioneDa||'-'}</td><td>${m.locazioneA||'-'}</td><td>${m.quantita}</td><td>${m.controparte||'-'}</td><td>${m.causale}</td><td>${m.creatoIl}</td><td>${m.creatoDa}</td><td>${stampaCell}</td></tr>`;
           }).join('')}
         </tbody>
       </table>
     </div>
   `;
+  document.querySelectorAll('.stampa-doc-mb51').forEach(elx => {
+    elx.addEventListener('click', () => stampaDocumentoMateriale(elx.dataset.documento));
+  });
   document.querySelectorAll('.stampa-ric-mb51').forEach(elx => {
     elx.addEventListener('click', () => stampaMovimentoRicevimento(elx.dataset.movimento));
   });
@@ -4181,8 +5046,8 @@ function renderMovList(el) {
   document.getElementById('f-filtro-da').addEventListener('input', e => { filtroMov.dataDa = e.target.value; renderScreenContent(); });
   document.getElementById('f-filtro-a').addEventListener('input', e => { filtroMov.dataA = e.target.value; renderScreenContent(); });
   document.getElementById('export-mov').addEventListener('click', () => {
-    const intestazioni = ['N. movimento','Materiale','Tipo','Da','A','Quantità','Fornitore/Cliente','Causale','Data','Creato da'];
-    const righeCSV = elenco.map(m => [m.numero, materialeLabel(m.materiale), m.tipo, m.locazioneDa||'-', m.locazioneA||'-', m.quantita, m.controparte||'-', m.causale, m.creatoIl, m.creatoDa]);
+    const intestazioni = ['N. movimento','Doc. materiale','Tp.mov.','Materiale','Tipo','Da','A','Quantità','Fornitore/Cliente','Causale','Data','Creato da'];
+    const righeCSV = elenco.map(m => [m.numero, m.documento||'-', m.tipoMov||'-', materialeLabel(m.materiale), m.tipo, m.locazioneDa||'-', m.locazioneA||'-', m.quantita, m.controparte||'-', m.causale, m.creatoIl, m.creatoDa]);
     esportaCSV('Movimentazioni_' + isoDate(new Date()) + '.csv', intestazioni, righeCSV);
   });
 }
@@ -4331,15 +5196,22 @@ function renderVL01N(el) {
       const residuo = riga.quantita - (riga.consegnato||0);
       if (qta > residuo) { setStatus(`Quantità per ${riga.prodotto} superiore al residuo ordinato.`, true); return; }
       const dispSpedizione = getGiacenzaLoc(riga.prodotto, 'SPEDIZIONE');
-      if (qta > dispSpedizione) { setStatus(`Merce insufficiente in SPEDIZIONE per ${riga.prodotto}: disponibili ${dispSpedizione}.`, true); return; }
+      if (qta > dispSpedizione && !(await negativoAmmesso(riga.prodotto))) { setStatus(`Merce insufficiente in SPEDIZIONE per ${riga.prodotto}: disponibili ${dispSpedizione}.`, true); return; }
       righeDaConsegnare.push({ idx, prodotto: riga.prodotto, quantita: qta });
     }
     if (righeDaConsegnare.length === 0) { setStatus('Inserisci almeno una quantità da consegnare.', true); return; }
 
+    // Ordine delle operazioni: PRIMA si salva l'avanzamento della consegna (e si controlla che sia davvero salvato sul
+    // server condiviso), POI si registra il movimento di magazzino: se il salvataggio fallisce non resta una spedizione
+    // "a metà" (merce uscita ma ordine ancora aperto, che porterebbe a spedire due volte).
+    const attesi = {}; // idx -> consegnato atteso dopo l'operazione
     for (const rc of righeDaConsegnare) {
-      ordine.righe[rc.idx].consegnato = (ordine.righe[rc.idx].consegnato || 0) + rc.quantita;
+      const prima = ordine.righe[rc.idx].consegnato || 0;
+      const nuovo = prima + rc.quantita;
+      const okP = await applicaPatch('ordiniVendita', ordine.numero, { consegnato: nuovo }, { arrayField: 'righe', arrayIndex: rc.idx });
+      if (!okP) { setStatus(`⚠️ Spedizione NON registrata: il salvataggio sul server condiviso è fallito (connessione instabile). Nessun movimento è stato fatto. Riprova tra poco.`, true); renderMain(); return; }
+      ordine.righe[rc.idx].consegnato = nuovo; attesi[rc.idx] = nuovo;
       await registraMovimento({ materiale: rc.prodotto, locazioneDa: 'SPEDIZIONE', locazioneA: null, quantita: rc.quantita, causale: 'Spedizione DDT VL01N (' + ordine.numero + ')' });
-      await applicaPatch('ordiniVendita', ordine.numero, { consegnato: ordine.righe[rc.idx].consegnato }, { arrayField: 'righe', arrayIndex: rc.idx });
     }
     if (ordine.righe.every(r => (r.consegnato||0) >= r.quantita)) {
       ordine.stato = 'evaso';
@@ -4353,8 +5225,18 @@ function renderVL01N(el) {
     };
     await aggiungiRecord('consegne', ddt);
     consegne.push(ddt);
+    // Verifica dal server: rilegge tutto il corso e controlla che la consegna risulti davvero salvata per tutti.
+    let avvisoVerifica = '';
+    try {
+      await caricaCacheCorso();
+      const fresche = await loadList('ordiniVendita');
+      const o2 = fresche.find(o => o.numero === ordine.numero);
+      const ok = o2 && Object.entries(attesi).every(([i, v]) => ((o2.righe[i] || {}).consegnato || 0) >= v);
+      if (!ok) avvisoVerifica = ' ⚠️ ATTENZIONE: la consegna NON risulta salvata sul server condiviso (l\'ordine potrebbe ricomparire come aperto). Non rifare la spedizione: avvisa il formatore.';
+      else { normalizzaOrdiniVendita(fresche); ordiniVendita = fresche; }
+    } catch (e) { /* verifica non possibile: si lascia il messaggio normale */ }
     draftVL = { ordineVendita:"", righe:{} };
-    setStatus(`Consegna registrata: DDT ${ddt.numero} generato per l'ordine ${ordine.numero}.`);
+    setStatus(`Consegna registrata: DDT ${ddt.numero} generato per l'ordine ${ordine.numero}.${avvisoVerifica}`, !!avvisoVerifica);
     renderMain();
   }));
 }
@@ -4461,8 +5343,9 @@ function renderMM01(el) {
           <label>Scorta minima</label><input id="f-scortamin" type="number" min="0" value="${draftMateriale.scortaMinima}">
           <label>Scorta di sicurezza</label><input id="f-scortasic" type="number" min="0" value="${draftMateriale.scortaSicurezza}">
           <label>Punto di riordino</label><input id="f-puntoriord" type="number" min="0" value="${draftMateriale.puntoRiordino}">
+          ${campiMRPHTML('mm01', draftMateriale)}
         </div>
-        <p style="font-size:10.5px; color:#8a8a80; margin-top:8px;">Questi tre valori sono facoltativi (default 0). Scorta minima e punto di riordino sono solo riferimento visivo in MMBE (semaforo giacenza). La scorta di sicurezza invece viene sottratta davvero dalla giacenza disponibile in MD01/MD03/MD04, come nel vero MRP SAP.</p>
+        <p style="font-size:10.5px; color:#8a8a80; margin-top:8px;">Parametri MRP come in SAP (solo materie prime). <strong>Giacenza negativa ammessa</strong> vale per qualsiasi materiale (anche PF) e funziona solo se il formatore attiva anche l'interruttore generale. Valori a 0 o vuoti = parametro non attivo. <strong>Tipo MRP</strong>: PD pianifica sui fabbisogni reali (ordini di produzione) rispettando la scorta di sicurezza; VB crea una RA quando giacenza + ordini in arrivo scendono sotto il punto di riordino; ND esclude il materiale dall'MRP. <strong>Politica di lotto</strong>: EX lotto per lotto, FX multipli del lotto fisso, HB fino al livello massimo, TB/WB/MB lotto giornaliero/settimanale/mensile. Dopo la politica si applicano lotto minimo, multiplo (arrotondamento) e lotto massimo (spezza l'ordine). La data di rilascio dell'RA si calcola all'indietro dal fabbisogno con tempo di consegna e tempo di entrata merci. Scorta minima: solo riferimento visivo in MMBE.</p>
       `}
     </div>
     <div class="tablewrap">
@@ -4477,6 +5360,7 @@ function renderMM01(el) {
     </div>
   `;
   attachSapTabsListeners(tab => { mm01TabAttivo = tab; renderScreenContent(); });
+  collegaCampiMRP('mm01', draftMateriale);
   ['f-codice','f-desc','f-tipo','f-um','f-giac','f-scortamin','f-scortasic','f-puntoriord'].forEach(id => {
     const campo = document.getElementById(id);
     if (!campo) return; // solo i campi della scheda attiva sono nel DOM
@@ -4498,6 +5382,7 @@ function renderMM01(el) {
     }
     const rec = { codice: codiceNuovo, descrizione: draftMateriale.descrizione, tipo: draftMateriale.tipo, um: draftMateriale.um,
       scortaMinima: Number(draftMateriale.scortaMinima)||0, scortaSicurezza: Number(draftMateriale.scortaSicurezza)||0, puntoRiordino: Number(draftMateriale.puntoRiordino)||0,
+      ...valoriMRPDaDraft(draftMateriale),
       creatoDa: currentUser, creatoIl: nowStr() };
     await aggiungiRecord('materiali', rec);
     materiali.push(rec);
@@ -4505,7 +5390,7 @@ function renderMM01(el) {
     if (giacenzaIniziale > 0) {
       await registraMovimento({ materiale: rec.codice, locazioneDa: null, locazioneA: 'RICEZIONE', quantita: giacenzaIniziale, causale: 'Carico iniziale anagrafica (MM01)' });
     }
-    draftMateriale = { codice:"", descrizione:"", tipo:"MP", um:"PZ", giacenza:"0", scortaMinima:"0", scortaSicurezza:"0", puntoRiordino:"0" };
+    draftMateriale = { codice:"", descrizione:"", tipo:"MP", um:"PZ", giacenza:"0", scortaMinima:"0", scortaSicurezza:"0", puntoRiordino:"0", ...draftMRPDefault() };
     mm01TabAttivo = 'base';
     setStatus(`Materiale ${rec.codice} creato con successo.${giacenzaIniziale>0 ? ' Giacenza iniziale caricata in RICEZIONE.' : ''}`);
     renderMain();
@@ -4517,7 +5402,7 @@ function renderMM02(el) {
   const mat = materiali.find(m => m.codice === draftMM02.codiceSelezionato);
   el.innerHTML = `
     <div class="formwrap" style="padding-bottom:0;">
-      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Modifica scorta minima, scorta di sicurezza e punto di riordino di un materiale già esistente, senza toccare il suo storico (giacenza, movimenti, ordini collegati restano invariati).</p>
+      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Modifica scorte e parametri MRP (tipo MRP, politica e dimensione del lotto, multiplo, tempi di consegna) di un materiale già esistente, senza toccare il suo storico (giacenza, movimenti, ordini collegati restano invariati).</p>
     </div>
     <div class="actionrow"><button class="actionbtn" id="save-mm02">✔ Salva modifiche</button></div>
     <div class="formwrap">
@@ -4530,6 +5415,7 @@ function renderMM02(el) {
           <label>Scorta minima</label><input id="f-scortamin-mm02" type="number" min="0" value="${draftMM02.scortaMinima}">
           <label>Scorta di sicurezza</label><input id="f-scortasic-mm02" type="number" min="0" value="${draftMM02.scortaSicurezza}">
           <label>Punto di riordino</label><input id="f-puntoriord-mm02" type="number" min="0" value="${draftMM02.puntoRiordino}">
+          ${campiMRPHTML('mm02', draftMM02)}
         </div>
         <p style="font-size:10.5px; color:#8a8a80; margin-top:8px;">Giacenza attuale: <strong>${getGiacenza(mat.codice)}</strong> ${mat.um}</p>
       ` : ''}
@@ -4542,6 +5428,7 @@ function renderMM02(el) {
       scortaMinima: String(m ? (m.scortaMinima||0) : 0),
       scortaSicurezza: String(m ? (m.scortaSicurezza||0) : 0),
       puntoRiordino: String(m ? (m.puntoRiordino||0) : 0),
+      ...draftMRPDaMateriale(m),
     };
     renderScreenContent();
   });
@@ -4549,6 +5436,7 @@ function renderMM02(el) {
     document.getElementById('f-scortamin-mm02').addEventListener('input', e => draftMM02.scortaMinima = e.target.value);
     document.getElementById('f-scortasic-mm02').addEventListener('input', e => draftMM02.scortaSicurezza = e.target.value);
     document.getElementById('f-puntoriord-mm02').addEventListener('input', e => draftMM02.puntoRiordino = e.target.value);
+    collegaCampiMRP('mm02', draftMM02);
   }
   document.getElementById('save-mm02').addEventListener('click', () => withGuard(async () => {
     if (!draftMM02.codiceSelezionato) { setStatus('Seleziona un materiale.', true); return; }
@@ -4556,6 +5444,7 @@ function renderMM02(el) {
       scortaMinima: Number(draftMM02.scortaMinima)||0,
       scortaSicurezza: Number(draftMM02.scortaSicurezza)||0,
       puntoRiordino: Number(draftMM02.puntoRiordino)||0,
+      ...valoriMRPDaDraft(draftMM02),
     };
     await applicaPatch('materiali', draftMM02.codiceSelezionato, nuoviValori);
     Object.assign(mat, nuoviValori);
@@ -4573,6 +5462,9 @@ function renderMM03(el) {
     { campo:'tipo', label:'Tipo', get:m=>m.tipo==='MP'?'Materia Prima':'Prodotto Finito' },
     { campo:'um', label:'UM' },
     { campo:'giacenza', label:'Giacenza', get:m=>getGiacenza(m.codice) },
+    { campo:'gruppoProdotti', label:'Gruppo prodotti', get:m=>m.gruppoProdotti||'-' },
+    { campo:'tipoMRP', label:'Tipo MRP', get:m=>m.tipo==='MP'?(m.tipoMRP||'PD'):'-' },
+    { campo:'politicaLotto', label:'Politica lotto', get:m=>m.tipo==='MP'?(m.politicaLotto||'EX'):'-' },
     { campo:'creatoDa', label:'Creato da' },
     { campo:'creatoIl', label:'Data' },
   ];
@@ -4593,7 +5485,7 @@ function renderMM03(el) {
         <thead><tr>${colonne.map(c => `<th class="mm03-sort-th" data-campo="${c.campo}" style="cursor:pointer; user-select:none;" title="Clicca per ordinare">${c.label}${sortMM03.campo===c.campo ? (sortMM03.asc?' ▲':' ▼') : ''}</th>`).join('')}<th>Azioni</th></tr></thead>
         <tbody>
           ${elenco.length === 0 ? `<tr><td colspan="${colonne.length+1}" style="text-align:center; color:#9a9a8f; padding:16px;">Nessun materiale in anagrafica. Usa MM01 per crearne uno.</td></tr>` :
-            elenco.map(m => `<tr><td>${m.codice}</td><td>${m.descrizione}</td><td>${m.tipo==='MP'?'Materia Prima':'Prodotto Finito'}</td><td>${m.um}</td><td>${getGiacenza(m.codice)}</td><td>${m.creatoDa}</td><td>${m.creatoIl}</td><td>${deleteActionCell('mat-'+m.codice, materialeInUso(m.codice) ? 'in uso, non eliminabile' : null)}</td></tr>`).join('')}
+            elenco.map(m => `<tr><td>${m.codice}</td><td>${m.descrizione}</td><td>${m.tipo==='MP'?'Materia Prima':'Prodotto Finito'}</td><td>${m.um}</td><td>${getGiacenza(m.codice)}</td><td>${m.gruppoProdotti||'-'}</td><td>${m.tipo==='MP'?(m.tipoMRP||'PD'):'-'}</td><td>${m.tipo==='MP'?(m.politicaLotto||'EX'):'-'}</td><td>${m.creatoDa}</td><td>${m.creatoIl}</td><td>${deleteActionCell('mat-'+m.codice, materialeInUso(m.codice) ? 'in uso, non eliminabile' : null)}</td></tr>`).join('')}
         </tbody>
       </table>
     </div>
@@ -4759,7 +5651,6 @@ function renderXD01(el) {
 // ============ CS01 (BOM) ============
 function renderCS01(el) {
   const prodottiFiniti = materiali.filter(m => m.tipo === 'PF');
-  const materiePrime = materiali.filter(m => m.tipo === 'MP');
   const tabsCS01 = [{key:'testata', label:'① Testata'}, {key:'componenti', label:'② Componenti'}];
 
   el.innerHTML = `
@@ -4781,7 +5672,7 @@ function renderCS01(el) {
           <div class="formgrid" style="margin-bottom:4px;" data-comprow="${i}">
             <label>Componente ${i+1}</label>
             <div style="display:flex; gap:6px;">
-              <div style="flex:2;">${campoF4HTML('f-comp-codice-'+i, c.codice ? materialeLabel(c.codice) : '', '-- cerca materia prima (F4) --')}</div>
+              <div style="flex:2;">${campoF4HTML('f-comp-codice-'+i, c.codice ? materialeLabel(c.codice) : '', '-- cerca componente (F4) --')}</div>
               <input class="comp-qta" data-i="${i}" type="number" min="0" step="0.01" value="${c.qta}" style="width:80px; font-size:11.5px; padding:3px; border:1px solid #7f9db9;" placeholder="Qtà">
               ${draftDistinta.componenti.length > 1 ? `<span class="rowaction danger remove-comp" data-i="${i}" style="cursor:pointer;">rimuovi</span>` : ''}
             </div>
@@ -4797,7 +5688,7 @@ function renderCS01(el) {
           distinte.map(d => `<tr><td>${materialeLabel(d.prodotto)}</td><td>${d.componenti.map(c=>materialeLabel(c.codice)+' x'+c.qta).join(', ')}</td><td>${d.creatoDa}</td><td>${deleteActionCell('bom-'+d.prodotto)}</td></tr>`).join('')}
         </tbody>
       </table>
-      <p style="font-size:10px; color:#8a8a80; padding:6px 8px;">Per modificare i componenti di una distinta già esistente usa CS02.</p>
+      <p style="font-size:10px; color:#8a8a80; padding:6px 8px;">Per modificare i componenti di una distinta già esistente usa CS02. Un componente può essere anche un <strong>semilavorato</strong> (materiale di tipo Prodotto Finito con una propria distinta): si ottiene una distinta multilivello, da usare solo se serve. Per vedere la struttura: CS03; per sapere dove è usato un materiale: CS15.</p>
     </div>
   `;
 
@@ -4829,7 +5720,7 @@ function renderCS01(el) {
   });
   attachSapTabsListeners(tab => { cs01TabAttivo = tab; renderScreenContent(); });
   draftDistinta.componenti.forEach((c, i) => {
-    collegaF4('f-comp-codice-'+i, 'Cerca materia prima', materiePrime.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
+    collegaF4('f-comp-codice-'+i, 'Cerca componente (materia prima o semilavorato)', componenteDistintaOpzioni(draftDistinta.prodotto), (valore) => {
       draftDistinta.componenti[i].codice = valore;
       renderScreenContent();
     });
@@ -4842,6 +5733,7 @@ function renderCS01(el) {
     const compValide = draftDistinta.componenti.filter(c => c.codice && Number(c.qta) > 0);
     if (compValide.length === 0) { setStatus('Aggiungi almeno un componente valido.', true); return; }
     distinte = await loadList('distinte');
+    if (distintaCreaCiclo(draftDistinta.prodotto, compValide)) { setStatus('Distinta non valida: un componente contiene già questo prodotto nella sua distinta (riferimento circolare).', true); return; }
     if (distinte.some(d => d.prodotto === draftDistinta.prodotto)) { setStatus('Esiste già una distinta base per questo prodotto. Usa CS02 per modificarla.', true); return; }
     const rec = { prodotto: draftDistinta.prodotto, componenti: compValide, creatoDa: currentUser, creatoIl: nowStr() };
     await aggiungiRecord('distinte', rec);
@@ -4855,7 +5747,6 @@ function renderCS01(el) {
 
 // ============ CS02 (modifica distinta base) ============
 function renderCS02(el) {
-  const materiePrime = materiali.filter(m => m.tipo === 'MP');
   const prodottiConBOM = distinte.map(d => d.prodotto);
   const tabsCS02 = [{key:'testata', label:'① Testata'}, {key:'componenti', label:'② Componenti'}];
   const selezionato = !!draftDistintaModifica._originale;
@@ -4881,7 +5772,7 @@ function renderCS02(el) {
           <div class="formgrid" style="margin-bottom:4px;" data-comprow="${i}">
             <label>Componente ${i+1}</label>
             <div style="display:flex; gap:6px;">
-              <div style="flex:2;">${campoF4HTML('f-comp-cs02-'+i, c.codice ? materialeLabel(c.codice) : '', '-- cerca materia prima (F4) --')}</div>
+              <div style="flex:2;">${campoF4HTML('f-comp-cs02-'+i, c.codice ? materialeLabel(c.codice) : '', '-- cerca componente (F4) --')}</div>
               <input class="comp-qta-cs02" data-i="${i}" type="number" min="0" step="0.01" value="${c.qta}" style="width:80px; font-size:11.5px; padding:3px; border:1px solid #7f9db9;" placeholder="Qtà">
               ${draftDistintaModifica.componenti.length > 1 ? `<span class="rowaction danger remove-comp-cs02" data-i="${i}" style="cursor:pointer;">rimuovi</span>` : ''}
             </div>
@@ -4923,7 +5814,7 @@ function renderCS02(el) {
   });
   attachSapTabsListeners(tab => { cs02TabAttivo = tab; renderScreenContent(); });
   draftDistintaModifica.componenti.forEach((c, i) => {
-    collegaF4('f-comp-cs02-'+i, 'Cerca materia prima', materiePrime.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
+    collegaF4('f-comp-cs02-'+i, 'Cerca componente (materia prima o semilavorato)', componenteDistintaOpzioni(draftDistintaModifica.prodotto), (valore) => {
       draftDistintaModifica.componenti[i].codice = valore;
       renderScreenContent();
     });
@@ -4944,6 +5835,7 @@ function renderCS02(el) {
       renderMain();
       return;
     }
+    if (distintaCreaCiclo(prodotto, compValide)) { setStatus('Distinta non valida: un componente contiene già questo prodotto nella sua distinta (riferimento circolare).', true); return; }
     await applicaPatch('distinte', prodotto, { componenti: compValide });
     const d = distinte.find(x => x.prodotto === prodotto);
     if (d) d.componenti = compValide;
@@ -4952,6 +5844,72 @@ function renderCS02(el) {
     setStatus(`Distinta base per ${prodotto} aggiornata con successo.`);
     renderMain();
   }));
+}
+
+
+// ============ CS03 (visualizza distinta base, anche multilivello) e CS15 (lista di impiego) ============
+let draftCS03 = { prodotto: '', vista: 'livelli', quantita: '1' };
+function renderCS03(el) {
+  const conBOM = distinte.map(d => ({ value: d.prodotto, label: materialeLabel(d.prodotto) }));
+  const q = Math.max(Number(draftCS03.quantita) || 1, 0.0001);
+  const righe = draftCS03.prodotto ? esplodiDistinta(draftCS03.prodotto, q) : [];
+  const tipoDi = c => { const m = materiali.find(x => x.codice === c); return m ? (m.tipo === 'PF' ? 'Semilavorato' : 'Materia prima') : '-'; };
+  let corpo = '';
+  if (draftCS03.prodotto) {
+    const b = getBOM(draftCS03.prodotto);
+    if (!b) corpo = '<p style="font-size:11px;color:#a83232;">Questo prodotto non ha una distinta base.</p>';
+    else if (draftCS03.vista === 'riepilogo') {
+      // CS13: riepilogo dei soli componenti foglia (materie prime), quantità totali
+      const tot = {};
+      righe.filter(r => !getBOM(r.codice)).forEach(r => { tot[r.codice] = (tot[r.codice] || 0) + r.qtaTot; });
+      corpo = `<table><thead><tr><th>Componente</th><th>Tipo</th><th>Quantità totale per ${q} pz</th><th>Giacenza</th></tr></thead><tbody>${Object.entries(tot).map(([c, v]) => `<tr><td>${materialeLabel(c)}</td><td>${tipoDi(c)}</td><td style="font-weight:600;">${v}</td><td>${getGiacenza(c)}</td></tr>`).join('')}</tbody></table>`;
+    } else {
+      const vis = draftCS03.vista === 'livelli' ? righe.filter(r => r.livello === 1) : righe;
+      corpo = `<table><thead><tr><th>Livello</th><th>Componente</th><th>Tipo</th><th>Qtà per 1 pz del padre</th><th>Qtà totale per ${q} pz</th><th>Padre</th></tr></thead><tbody>${vis.map(r => `<tr><td>${r.livello}</td><td style="padding-left:${6 + (r.livello - 1) * 16}px;">${materialeLabel(r.codice)}${getBOM(r.codice) ? ' <span style="color:#3a5a8c;">▸ ha una distinta</span>' : ''}</td><td>${tipoDi(r.codice)}</td><td>${r.qtaUnit}</td><td style="font-weight:600;">${r.qtaTot}</td><td>${r.padre}</td></tr>`).join('')}</tbody></table>`
+        + (draftCS03.vista === 'livelli' && righe.some(r => r.livello > 1) ? '<p style="font-size:10.5px;color:#3a5a8c;margin-top:6px;">Ci sono semilavorati con una propria distinta: scegli "Esplosa multilivello" per vedere tutti i livelli.</p>' : '');
+    }
+  }
+  el.innerHTML = `
+    <div class="formwrap">
+      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Visualizza la distinta base di un prodotto: a un livello (CS03/CS11), esplosa su tutti i livelli (CS12) oppure riepilogata con le sole materie prime (CS13).</p>
+      <div class="formgrid">
+        <label>Prodotto</label>${campoF4HTML('cs03-prod', draftCS03.prodotto ? materialeLabel(draftCS03.prodotto) : '', '-- cerca distinta (F4) --')}
+        <label>Quantità del prodotto</label><input id="cs03-qta" type="number" min="1" value="${draftCS03.quantita}" style="width:90px;">
+        <label>Vista</label>
+        <select id="cs03-vista">
+          <option value="livelli" ${draftCS03.vista === 'livelli' ? 'selected' : ''}>Livello per livello (solo primo livello)</option>
+          <option value="esplosa" ${draftCS03.vista === 'esplosa' ? 'selected' : ''}>Esplosa multilivello</option>
+          <option value="riepilogo" ${draftCS03.vista === 'riepilogo' ? 'selected' : ''}>Riepilogata (solo materie prime, totali)</option>
+        </select>
+      </div>
+    </div>
+    <div class="tablewrap" style="margin-top:6px;">${corpo}</div>`;
+  collegaF4('cs03-prod', 'Cerca distinta', conBOM, v => { draftCS03.prodotto = v; renderScreenContent(); });
+  document.getElementById('cs03-qta').addEventListener('change', e => { draftCS03.quantita = e.target.value; renderScreenContent(); });
+  document.getElementById('cs03-vista').addEventListener('change', e => { draftCS03.vista = e.target.value; renderScreenContent(); });
+}
+let draftCS15 = { materiale: '', multilivello: true };
+function renderCS15(el) {
+  const righe = draftCS15.materiale ? impiegoMateriale(draftCS15.materiale, draftCS15.multilivello) : [];
+  const opAperti = cod => ordiniProduzione.filter(o => o.stato === 'aperto' && o.prodotto === cod).length;
+  el.innerHTML = `
+    <div class="formwrap">
+      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Lista di impiego: in quali distinte base è usato un materiale. Con "Multilivello" si risale tutta la catena (materiale → semilavorato → prodotto finito).</p>
+      <div class="formgrid">
+        <label>Materiale</label>${campoF4HTML('cs15-mat', draftCS15.materiale ? materialeLabel(draftCS15.materiale) : '', '-- cerca materiale (F4) --')}
+        <label>Multilivello</label><input type="checkbox" id="cs15-multi" ${draftCS15.multilivello ? 'checked' : ''} style="width:auto;">
+      </div>
+    </div>
+    <div class="tablewrap" style="margin-top:6px;">
+      <table>
+        <thead><tr><th>Livello</th><th>Prodotto che lo contiene</th><th>Qtà diretta (per 1 pz del prodotto)</th><th>Qtà per 1 pz del prodotto</th><th>Percorso</th><th>ODP aperti del prodotto</th></tr></thead>
+        <tbody>${!draftCS15.materiale ? '<tr><td colspan="6" style="text-align:center;color:#9a9a8f;padding:14px;">Seleziona un materiale.</td></tr>'
+          : righe.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:#9a9a8f;padding:14px;">Il materiale non è usato in nessuna distinta base.</td></tr>'
+          : righe.map(r => `<tr><td>${r.livello}</td><td style="padding-left:${6 + (r.livello - 1) * 16}px;">${materialeLabel(r.prodotto)}</td><td>${r.qtaDiretta}</td><td style="font-weight:600;">${r.qtaPerPezzo}</td><td style="font-size:10.5px;">${r.percorso.slice().reverse().join(' → ')}</td><td>${opAperti(r.prodotto)}</td></tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+  collegaF4('cs15-mat', 'Cerca materiale', materiali.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), v => { draftCS15.materiale = v; renderScreenContent(); });
+  document.getElementById('cs15-multi').addEventListener('change', e => { draftCS15.multilivello = e.target.checked; renderScreenContent(); });
 }
 
 // ============ BOOT ============
@@ -4991,6 +5949,7 @@ async function boot() {
   consegne = await loadList('consegne');
   locazioni = await loadList('locazioni');
   movimentazioni = await loadList('movimentazioni');
+  erroriMovimenti = await loadList('erroriMovimenti');
   preferiti = await loadList('preferiti', false);
 
   const { out } = normalizzaOrdiniVendita(ordiniVendita);
