@@ -730,7 +730,8 @@ function fornitoreInUso(codice) {
 const MRP_TIPI = [['PD','PD - MRP (pianificazione deterministica)'],['VB','VB - Punto di riordino manuale'],['ND','ND - Nessuna pianificazione']];
 const MRP_POLITICHE = [['EX','EX - Lotto per lotto'],['FX','FX - Quantità fissa (lotto fisso)'],['HB','HB - Riempimento fino al livello massimo'],['TB','TB - Lotto giornaliero'],['WB','WB - Lotto settimanale'],['MB','MB - Lotto mensile']];
 const MRP_CAMPI_MM = [
-  { k:'gruppoProdotti', label:'Gruppo prodotti', tipo:'testo', def:'' },
+  { k:'gruppoProdotti', label:'Gruppo prodotti', tipo:'testo', def:'', ph:'es. DIVANI (testo libero)' },
+  { k:'pianificatore', label:'Pianificatore MRP', tipo:'testo', def:'', ph:'es. P01 (testo libero): chi pianifica questo materiale' },
   { k:'tipoMRP', label:'Tipo MRP', tipo:'select', opzioni: MRP_TIPI, def:'PD' },
   { k:'politicaLotto', label:'Politica di lotto', tipo:'select', opzioni: MRP_POLITICHE, def:'EX' },
   { k:'lottoFisso', label:'Lotto fisso (per FX)', def:'0' },
@@ -755,7 +756,7 @@ function valoriMRPDaDraft(draft) {
 }
 function campiMRPHTML(prefisso, draft) {
   return MRP_CAMPI_MM.map(c => c.tipo === 'testo'
-    ? `<label>${c.label}</label><div><input id="${prefisso}-${c.k}" list="${prefisso}-${c.k}-dl" value="${String(draft[c.k] || '').replace(/"/g, '&quot;')}" placeholder="es. DIVANI (testo libero)" style="text-transform:uppercase;"><datalist id="${prefisso}-${c.k}-dl">${[...new Set(materiali.map(m => m.gruppoProdotti).filter(Boolean))].sort().map(g => `<option value="${g}">`).join('')}</datalist></div>`
+    ? `<label>${c.label}</label><div><input id="${prefisso}-${c.k}" list="${prefisso}-${c.k}-dl" value="${String(draft[c.k] || '').replace(/"/g, '&quot;')}" placeholder="${c.ph || ''}" style="text-transform:uppercase;"><datalist id="${prefisso}-${c.k}-dl">${[...new Set(materiali.map(m => m[c.k]).filter(Boolean))].sort().map(g => `<option value="${g}">`).join('')}</datalist></div>`
     : c.tipo === 'select'
     ? `<label>${c.label}</label><select id="${prefisso}-${c.k}">${c.opzioni.map(o => `<option value="${o[0]}" ${draft[c.k] === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>`
     : `<label>${c.label}</label><input id="${prefisso}-${c.k}" type="number" min="0" value="${draft[c.k]}">`).join('');
@@ -791,8 +792,8 @@ let filtroMov = { causale:"", tipo:"", controparte:"", materiale:"", dataDa:"", 
 let draftPR = { materiale:"", quantita:"1", dataRichiesta:"" };
 let draftPO = { fornitore:"", selezionate:{} }; // selezionate: { numeroRichiesta: {prezzo, dataConsegna} }
 let draftMD02 = { materiale: "", modalita: "1", mostra: true, risultato: null };
-let draftMD03 = { materiale: "", modalita: "1", mostra: true, risultato: null };
-let draftMD04 = { materiale: "" };
+let draftMD03 = { materiale: "", pianificatori: [], modalita: "1", mostra: true, risultato: null };
+let draftMD04 = { materiale: "", pianificatori: [] };
 
 const MENU = [
   { label: "Logistica", active: true, children: [
@@ -3164,14 +3165,34 @@ function eccezioniMRP(mp) {
 }
 
 // ---- Esecuzione: calcolo (anteprima) e salvataggio ----
-function materialiInScopoMRP(codice) {
-  const mps = materiali.filter(m => m.tipo === 'MP');
-  return codice ? mps.filter(m => m.codice === codice) : mps.filter(m => mrpParam(m).tipo !== 'ND');
+// Filtro per pianificatore (funzione di comodo del simulatore, in SAP si fa con il perimetro di pianificazione):
+// elenco vuoto = tutti; PIAN_SENZA = materiali senza pianificatore assegnato.
+const PIAN_SENZA = '(senza)';
+function passaPianificatore(m, filtro) {
+  if (!filtro || !filtro.length) return true;
+  return m.pianificatore ? filtro.includes(m.pianificatore) : filtro.includes(PIAN_SENZA);
 }
-async function calcolaRisultatiMRP(codice, modalita) {
+function pianificatoriInUso() { return [...new Set(materiali.filter(m => m.tipo === 'MP').map(m => m.pianificatore).filter(Boolean))].sort(); }
+function pianificatoreFiltroHTML(draft) {
+  const sel = draft.pianificatori || [];
+  const chk = (v) => `<label style="display:inline-block;margin:2px 14px 2px 0;font-size:11.5px;"><input type="checkbox" class="md-pian" value="${v}" ${sel.includes(v) ? 'checked' : ''}> ${v}</label>`;
+  const elenco = pianificatoriInUso();
+  return `<label>Pianificatore MRP (vuoto = tutti)</label><div>${elenco.length ? elenco.map(chk).join('') + chk(PIAN_SENZA) : '<span style="font-size:11px;color:#9a9a8f;">Nessun pianificatore assegnato: impostalo ai materiali in MM01/MM02.</span>'}</div>`;
+}
+function collegaPianificatoreFiltro(draft, dopo) {
+  document.querySelectorAll('.md-pian').forEach(cb => cb.addEventListener('change', () => {
+    draft.pianificatori = [...document.querySelectorAll('.md-pian:checked')].map(x => x.value);
+    if (dopo) dopo(); else renderScreenContent();
+  }));
+}
+function materialiInScopoMRP(codice, pianificatori) {
+  const mps = materiali.filter(m => m.tipo === 'MP');
+  return codice ? mps.filter(m => m.codice === codice) : mps.filter(m => mrpParam(m).tipo !== 'ND' && passaPianificatore(m, pianificatori));
+}
+async function calcolaRisultatiMRP(codice, modalita, pianificatori) {
   [materiali, richiesteAcquisto, ordiniAcquisto, ordiniProduzione, movimentazioni] = await Promise.all(
     ['materiali','richiesteAcquisto','ordiniAcquisto','ordiniProduzione','movimentazioni'].map(k => loadList(k)));
-  const scope = materialiInScopoMRP(codice);
+  const scope = materialiInScopoMRP(codice, pianificatori);
   const codici = new Set(scope.map(m => m.codice));
   // Modalità 3 (cancella e ricrea): toglie dal calcolo (e, al salvataggio, elimina) le RA aperte generate dall'MRP
   // dall'utente corrente per i materiali in scopo. Le RA di altri partecipanti non vengono mai toccate.
@@ -3179,7 +3200,10 @@ async function calcolaRisultatiMRP(codice, modalita) {
     ? richiesteAcquisto.filter(r => r.stato === 'aperta' && r.origine === 'MD01/MRP' && r.creatoDa === currentUser && codici.has(r.materiale)).map(r => r.numero)
     : [];
   const set = new Set(esclusi);
-  return { codice, modalita, esclusi, risultati: scope.map(mp => pianificaMRP(mp, set)), salvato: false };
+  // Materie prime NON pianificate (tipo MRP ND): senza un materiale scelto vengono escluse dal calcolo, ma si elencano
+  // comunque nel risultato per mostrare che l'esclusione è voluta e non una dimenticanza.
+  const nonPianificati = codice ? [] : materiali.filter(m => m.tipo === 'MP' && mrpParam(m).tipo === 'ND' && passaPianificatore(m, pianificatori)).map(m => m.codice);
+  return { codice, modalita, esclusi, pianificatori: codice ? [] : (pianificatori || []), risultati: scope.map(mp => pianificaMRP(mp, set)), nonPianificati, salvato: false };
 }
 // MD02: MRP multilivello su un prodotto finito. Livello 1: il fabbisogno del prodotto (ordini di vendita residui, al netto di
 // giacenza e ordini di produzione aperti) genera ordini di produzione PIANIFICATI (non salvati: gli ordini veri si creano in MF50).
@@ -3239,7 +3263,16 @@ async function calcolaRisultatiMD02(pfCodice, modalita) {
   const set = new Set(esclusi);
   return { codice: pfCodice, modalita, esclusi, pianificati, senzaDistinta: !bom, risultati: scope.map(mp => pianificaMRP(mp, set, extra)), salvato: false };
 }
+// Quantità effettiva di una proposta: quella calcolata dall'MRP, o quella scelta a mano nella colonna "Quantità da creare".
+function qtaEffettivaProposta(pr) {
+  if (pr.qtaMod === undefined || pr.qtaMod === '') return pr.qta;
+  return Number(pr.qtaMod);
+}
 async function salvaRisultatiMRP(ris) {
+  for (const x of ris.risultati) for (const pr of x.proposte) {
+    const q = qtaEffettivaProposta(pr);
+    if (!Number.isInteger(q) || q < 0) return { errore: `${x.mp.codice}: la quantità da creare deve essere un numero intero, zero o maggiore.` };
+  }
   richiesteAcquisto = await loadList('richiesteAcquisto');
   let eliminate = 0, create = 0;
   for (const num of ris.esclusi) {
@@ -3249,10 +3282,13 @@ async function salvaRisultatiMRP(ris) {
   richiesteAcquisto = richiesteAcquisto.filter(r => !ris.esclusi.includes(r.numero));
   for (const x of ris.risultati) {
     for (const pr of x.proposte) {
+      const q = qtaEffettivaProposta(pr);
+      if (q === 0) continue; // quantità azzerata a mano: la RA non viene creata
       const rec = {
-        numero: await prossimoNumero('RA'), materiale: x.mp.codice, quantita: pr.qta,
+        numero: await prossimoNumero('RA'), materiale: x.mp.codice, quantita: q,
         dataRichiesta: pr.dataConsegna, dataRilascio: pr.dataRilascio, dataFabbisogno: pr.dataFabbisogno,
         stato: 'aperta', origine: 'MD01/MRP', creatoDa: currentUser, creatoIl: nowStr(),
+        ...(q !== pr.qta ? { qtaModificata: true, qtaProposta: pr.qta } : {}),
       };
       await aggiungiRecord('richiesteAcquisto', rec);
       richiesteAcquisto.push(rec); create++;
@@ -3262,12 +3298,42 @@ async function salvaRisultatiMRP(ris) {
 }
 
 // ---- Presentazione ----
-let draftMD01 = { materiale: "", modalita: "1", mostra: true, risultato: null };
+let draftMD01 = { materiale: "", pianificatori: [], modalita: "1", mostra: true, risultato: null };
+// Elenco di TUTTI i materiali valutati dall'MRP, anche quelli per cui non nasce nessuna RA, con il motivo.
+// Per ogni materiale mostra da dove arriva il fabbisogno (ordini di produzione aperti) e cosa lo copre già.
+function tabellaTuttiMaterialiMRP(ris) {
+  const stati = ris.risultati.map(x => {
+    const fabb = x.eventi.filter(e => e.tipo === 'fabbisogno');
+    const entr = x.eventi.filter(e => e.tipo === 'entrata');
+    const totFabb = fabb.reduce((s, e) => s + e.qta, 0);
+    const totEntr = entr.reduce((s, e) => s + e.qta, 0);
+    const rif = [...new Set(fabb.map(e => e.rif))];
+    let stato, ordine;
+    if (x.proposte.length) { stato = `<span style="color:#a83232;font-weight:600;">RA proposta (${x.proposte.length})</span>`; ordine = 0; }
+    else if (totFabb > 0) { stato = `<span style="color:#1a6b2e;">Coperto da giacenza/ordini</span>`; ordine = 1; }
+    else if (x.p.tipo === 'VB') { stato = `<span style="color:#1a6b2e;">Sopra il punto di riordino</span>`; ordine = 2; }
+    else { stato = `<span style="color:#8a8a80;">Nessun fabbisogno</span>`; ordine = 3; }
+    return { x, totFabb, totEntr, rif, stato, ordine };
+  }).sort((a, b) => a.ordine - b.ordine || a.x.mp.codice.localeCompare(b.x.mp.codice));
+  const nd = (ris.nonPianificati || []);
+  const origine = rif => rif.length === 0 ? '-' : rif.slice(0, 6).join(', ') + (rif.length > 6 ? ` +${rif.length - 6}` : '');
+  const righeHTML = stati.map(s => `<tr><td>${materialeLabel(s.x.mp.codice)}</td><td>${s.x.mp.pianificatore || '-'}</td><td>${s.x.p.tipo}</td><td>${s.x.stock}</td><td>${s.x.p.scortaSic || 0}</td><td>${s.totFabb}</td><td>${s.totEntr}</td><td style="font-size:10px;">${origine(s.rif)}</td><td>${s.stato}</td></tr>`).join('')
+    + nd.map(c => `<tr><td>${materialeLabel(c)}</td><td>${(materiali.find(m => m.codice === c) || {}).pianificatore || '-'}</td><td>ND</td><td>${getGiacenza(c)}</td><td>-</td><td>-</td><td>-</td><td>-</td><td><span style="color:#8a8a80;">ND, non pianificato</span></td></tr>`).join('');
+  return `
+      <p style="font-size:11px; margin:12px 0 4px 0;"><strong>Tutti i materiali valutati (${stati.length + nd.length})</strong> — anche quelli per cui non è nata nessuna RA. Fabbisogno = componenti degli ordini di produzione aperti${stati.some(s => s.x.eventi.some(e => e.fonte === 'PIAN')) ? ' e pianificati' : ''}; entrate = RA aperte e ordini d'acquisto non ancora ricevuti.</p>
+      <div class="tablewrap" style="margin:0;">
+        <table>
+          <thead><tr><th>Materiale</th><th>Pianificatore</th><th>Tipo MRP</th><th>Giacenza</th><th>Scorta sic.</th><th>Fabbisogno</th><th>Entrate</th><th>Origine fabbisogno</th><th>Esito</th></tr></thead>
+          <tbody>${righeHTML || '<tr><td colspan="9" style="text-align:center; color:#9a9a8f; padding:14px;">Nessun materiale in scopo.</td></tr>'}</tbody>
+        </table>
+      </div>`;
+}
 function htmlRisultatiMRP(ris) {
   const righe = [];
-  ris.risultati.forEach(x => x.proposte.forEach(pr => righe.push({ x, pr })));
+  ris.risultati.forEach((x, xi) => x.proposte.forEach((pr, pi) => righe.push({ x, pr, xi, pi })));
   const totRA = righe.length;
-  const sommario = `${ris.risultati.length} materiale/i pianificato/i · ${totRA} richiesta/e d'acquisto ${ris.salvato ? 'create' : 'proposte'}`
+  const modificabile = !ris.salvato;
+  const sommario = `${ris.risultati.length} materiale/i pianificato/i${ris.pianificatori && ris.pianificatori.length ? ' (pianificatore: ' + ris.pianificatori.join(', ') + ')' : ''} · ${totRA} richiesta/e d'acquisto ${ris.salvato ? 'create' : 'proposte'}`
     + (ris.esclusi.length ? ` · ${ris.salvato ? 'eliminate' : 'da eliminare'} ${ris.esclusi.length} RA MRP aperte precedenti (modalità 3)` : '');
   const pianHTML = ris.pianificati ? `
       <p style="font-size:11px; margin:0 0 4px 0;"><strong>Ordini di produzione pianificati — prodotto e semilavorati</strong> (non salvati: per crearli usa MF50; i semilavorati vanno prodotti prima del padre)</p>
@@ -3286,18 +3352,21 @@ function htmlRisultatiMRP(ris) {
       <p style="font-size:11px; margin:0 0 6px 0;"><strong>${ris.salvato ? '✔ Risultato salvato' : 'Risultato dell\'esecuzione (non ancora salvato)'}:</strong> ${sommario}.</p>
       <div class="tablewrap" style="margin:0;">
         <table>
-          <thead><tr><th>Materiale</th><th>Tipo MRP</th><th>Politica lotto</th><th>Giacenza</th><th>Scorta sic.</th><th>Quantità RA</th><th>Data fabbisogno</th><th>Data rilascio</th><th>Data consegna</th><th>Avviso</th></tr></thead>
-          <tbody>${totRA === 0 ? '<tr><td colspan="10" style="text-align:center; color:#9a9a8f; padding:14px;">Nessun fabbisogno netto da coprire: nessuna richiesta d\'acquisto da creare.</td></tr>' :
-            righe.map(({x, pr}) => `<tr><td>${materialeLabel(x.mp.codice)}</td><td>${x.p.tipo}</td><td>${x.p.tipo === 'VB' ? '-' : x.p.politica}</td><td>${x.stock}</td><td>${x.p.scortaSic || 0}</td><td style="font-weight:600;">${pr.qta}</td><td>${pr.dataFabbisogno}</td><td>${pr.dataRilascio}</td><td>${pr.dataConsegna}</td><td style="color:#a83232;">${pr.ritardo ? '⚠ Consegna dopo la data di fabbisogno (tempo di consegna non rispettabile)' : ''}</td></tr>`).join('')}
+          <thead><tr><th>Materiale</th><th>Pianificatore</th><th>Tipo MRP</th><th>Politica lotto</th><th>Giacenza</th><th>Scorta sic.</th><th>Quantità proposta</th>${modificabile ? '<th title="Funzione del simulatore: in SAP la quantità proposta dall\'MRP non si cambia in questa schermata">Quantità da creare ✎</th>' : ''}<th>Data fabbisogno</th><th>Data rilascio</th><th>Data consegna</th><th>Avviso</th></tr></thead>
+          <tbody>${totRA === 0 ? '<tr><td colspan="12" style="text-align:center; color:#9a9a8f; padding:14px;">Nessun fabbisogno netto da coprire: nessuna richiesta d\'acquisto da creare.</td></tr>' :
+            righe.map(({x, pr, xi, pi}) => { const qm = pr.qtaMod !== undefined ? pr.qtaMod : pr.qta; const diversa = String(qm) !== String(pr.qta); return `<tr><td>${materialeLabel(x.mp.codice)}</td><td>${x.mp.pianificatore || '-'}</td><td>${x.p.tipo}</td><td>${x.p.tipo === 'VB' ? '-' : x.p.politica}</td><td>${x.stock}</td><td>${x.p.scortaSic || 0}</td><td style="font-weight:600;">${pr.qta}</td>${modificabile ? `<td><input type="number" min="0" step="1" class="mrp-qta-edit" data-xi="${xi}" data-pi="${pi}" data-prop="${pr.qta}" value="${qm}" style="width:70px; font-size:11px; padding:3px; border:1px solid #7f9db9; ${diversa ? 'background:#fff1d6;' : ''}"></td>` : ''}<td>${pr.dataFabbisogno}</td><td>${pr.dataRilascio}</td><td>${pr.dataConsegna}</td><td style="color:#a83232;">${pr.ritardo ? '⚠ Consegna dopo la data di fabbisogno (tempo di consegna non rispettabile)' : ''}</td></tr>`; }).join('')}
           </tbody>
         </table>
       </div>
+      ${modificabile && totRA ? `<p style="font-size:10.5px; color:#8a6a1a; margin:4px 0 0 0;">✎ <strong>Quantità da creare</strong>: funzione didattica del simulatore, <u>non esiste in SAP</u>. Parte dalla quantità calcolata dall'MRP; puoi cambiarla prima di salvare (0 = non creare la RA). Le date restano quelle calcolate. Al prossimo lancio MD01 propone di nuovo l'eventuale differenza.</p>` : ''}
+      ${tabellaTuttiMaterialiMRP(ris)}
     </div>`;
 }
 async function eseguiMRPDaSchermata(draft) {
-  const ris = draft === draftMD02 ? await calcolaRisultatiMD02(draft.materiale, draft.modalita) : await calcolaRisultatiMRP(draft.materiale, draft.modalita);
+  const ris = draft === draftMD02 ? await calcolaRisultatiMD02(draft.materiale, draft.modalita) : await calcolaRisultatiMRP(draft.materiale, draft.modalita, draft.pianificatori);
   if (draft.mostra) { draft.risultato = ris; renderScreenContent(); return; }
   const out = await salvaRisultatiMRP(ris);
+  if (out.errore) { setStatus(out.errore, true); return; }
   ris.salvato = true; draft.risultato = ris;
   setStatus(`MRP eseguito: create ${out.create} richieste d'acquisto${out.eliminate ? `, eliminate ${out.eliminate} RA MRP precedenti` : ''}.`);
   renderMain();
@@ -3311,9 +3380,15 @@ function collegaAzioniMRP(draft) {
   const salva = document.getElementById('mrp-salva');
   if (salva) salva.addEventListener('click', () => withGuard(async () => {
     const out = await salvaRisultatiMRP(draft.risultato);
+    if (out.errore) { setStatus(out.errore, true); return; }
     draft.risultato.salvato = true;
     setStatus(`Salvate ${out.create} richieste d'acquisto${out.eliminate ? `, eliminate ${out.eliminate} RA MRP precedenti` : ''}.`);
     renderMain();
+  }));
+  document.querySelectorAll('.mrp-qta-edit').forEach(inp => inp.addEventListener('input', e => {
+    const pr = draft.risultato.risultati[Number(e.target.dataset.xi)].proposte[Number(e.target.dataset.pi)];
+    pr.qtaMod = e.target.value === '' ? '' : Number(e.target.value);
+    e.target.style.background = String(pr.qtaMod) !== String(e.target.dataset.prop) ? '#fff1d6' : '';
   }));
   const scarta = document.getElementById('mrp-scarta');
   if (scarta) scarta.addEventListener('click', () => { draft.risultato = null; renderScreenContent(); });
@@ -3344,8 +3419,9 @@ function renderMD01(el) {
   el.innerHTML = `
     ${azioniMRPHTML(d)}
     <div class="formwrap">
-      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Esecuzione dell'MRP come in SAP: per ogni materia prima pianificata (tipo MRP PD o VB) calcola il fabbisogno netto e crea le richieste d'acquisto, applicando scorta di sicurezza, politica e dimensione del lotto, multiplo e tempi di consegna del materiale (MM01/MM02). I parametri a 0 o vuoti non sono attivi. Lascia il materiale vuoto per pianificare tutte le materie prime.</p>
+      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Esecuzione dell'MRP come in SAP: per ogni materia prima pianificata (tipo MRP PD o VB) calcola il fabbisogno netto e crea le richieste d'acquisto, applicando scorta di sicurezza, politica e dimensione del lotto, multiplo e tempi di consegna del materiale (MM01/MM02). I parametri a 0 o vuoti non sono attivi. Lascia il materiale vuoto per pianificare tutte le materie prime (o solo quelle del pianificatore scelto: filtro del simulatore, in SAP si ottiene con il perimetro di pianificazione): sotto la tabella delle RA trovi l'elenco di tutti i materiali valutati, anche quelli senza RA, con l'esito e l'origine del fabbisogno.</p>
       <div class="formgrid">
+        ${pianificatoreFiltroHTML(d)}
         <label>Materiale (vuoto = tutti)</label>
         ${campoF4HTML('f-materiale-md01', mat ? materialeLabel(mat.codice) : '', '-- tutte le materie prime (F4 per sceglierne una) --')}
         ${parametriMRPHTML(d)}
@@ -3354,7 +3430,8 @@ function renderMD01(el) {
     </div>
     ${d.risultato ? htmlRisultatiMRP(d.risultato) : ''}
   `;
-  collegaF4('f-materiale-md01', 'Cerca materia prima', materiali.filter(m => m.tipo === 'MP').map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
+  collegaPianificatoreFiltro(d, () => { d.risultato = null; renderScreenContent(); });
+  collegaF4('f-materiale-md01', 'Cerca materia prima', materiali.filter(m => m.tipo === 'MP' && passaPianificatore(m, d.pianificatori)).map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
     d.materiale = valore; d.risultato = null; renderScreenContent();
   });
   const tutti = document.getElementById('md01-tutti');
@@ -3396,6 +3473,7 @@ function renderMD03(el) {
     <div class="formwrap">
       <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Esecuzione MRP per un singolo materiale (livello singolo): stessa logica di MD01, ma sul solo materiale scelto, con la lista disponibilità/fabbisogni sotto (come la vista risultato SAP).</p>
       <div class="formgrid">
+        ${pianificatoreFiltroHTML(d)}
         <label>Materiale</label>
         ${campoF4HTML('f-materiale-md03', mat ? materialeLabel(mat.codice) : '', '-- cerca materia prima (F4) --')}
         ${parametriMRPHTML(d)}
@@ -3404,7 +3482,8 @@ function renderMD03(el) {
     ${d.risultato ? htmlRisultatiMRP(d.risultato) : ''}
     ${mat ? `<div style="margin:0 10px;"><p style="font-size:11px; margin:6px 0 2px 0;"><strong>Lista disponibilità/fabbisogni di ${mat.codice}</strong>${proposte.length ? ' (comprese le RA proposte, non ancora salvate)' : ''}</p></div>${htmlTabellaMD04(mat, proposte)}` : ''}
   `;
-  collegaF4('f-materiale-md03', 'Cerca materia prima', materiali.filter(m => m.tipo === 'MP').map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
+  collegaPianificatoreFiltro(d);
+  collegaF4('f-materiale-md03', 'Cerca materia prima', materiali.filter(m => m.tipo === 'MP' && passaPianificatore(m, d.pianificatori)).map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
     d.materiale = valore; d.risultato = null; renderScreenContent();
   });
   collegaAzioniMRP(d);
@@ -3483,6 +3562,7 @@ function renderMD04(el) {
     <div class="formwrap" style="padding-bottom:0;">
       <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Elenco disponibilità/fabbisogni di un singolo materiale: tutti i movimenti previsti (ordini di vendita, ordini di produzione, richieste e ordini d'acquisto) in ordine cronologico, con la disponibilità cumulata e i messaggi di eccezione MRP (10 anticipare, 15 posticipare, 20 annullare, 96 scorta di sicurezza violata) — solo visualizzazione, nessuna modifica da qui.</p>
       <div class="formgrid">
+        ${pianificatoreFiltroHTML(draftMD04)}
         <label>Materiale</label>
         ${campoF4HTML('f-materiale-md04', mat ? materialeLabel(mat.codice) : '', '-- cerca materiale (F4) --')}
       </div>
@@ -3490,7 +3570,8 @@ function renderMD04(el) {
     </div>
     ${!mat ? '<p style="font-size:11px;color:#9a9a8f;margin:10px;">Seleziona un materiale per vedere il suo elenco.</p>' : htmlTabellaMD04(mat, [])}
   `;
-  collegaF4('f-materiale-md04', 'Cerca materiale', materiali.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
+  collegaPianificatoreFiltro(draftMD04);
+  collegaF4('f-materiale-md04', 'Cerca materiale', materiali.filter(m => m.tipo === 'MP' ? passaPianificatore(m, draftMD04.pianificatori) : !(draftMD04.pianificatori && draftMD04.pianificatori.length)).map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
     draftMD04.materiale = valore;
     renderScreenContent();
   });
@@ -4007,7 +4088,7 @@ function renderME51N(el) {
       <table>
         <thead><tr><th>N. richiesta</th><th>Materiale</th><th>Quantità</th><th>Data necessità</th><th>Data rilascio</th><th>Origine</th><th>Stato</th><th>Creato da</th><th>Azioni</th></tr></thead>
         <tbody>${richiesteAcquisto.length===0 ? '<tr><td colspan="9" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna richiesta d\'acquisto.</td></tr>' :
-          richiesteAcquisto.map(r => `<tr><td>${r.numero}</td><td>${materialeLabel(r.materiale)}</td><td>${r.quantita}</td><td>${r.dataRichiesta}</td><td>${r.dataRilascio||'-'}</td><td>${r.origine}</td><td>${semaforoStatoOrdine(r.stato)}</td><td>${r.creatoDa}</td><td>${deleteActionCell('pr-'+r.numero, r.stato==='convertita' ? 'già convertita' : null)}</td></tr>`).join('')}
+          richiesteAcquisto.map(r => `<tr><td>${r.numero}</td><td>${materialeLabel(r.materiale)}</td><td>${r.quantita}</td><td>${r.dataRichiesta}</td><td>${r.dataRilascio||'-'}</td><td>${r.origine}${r.qtaModificata ? ` <span style="font-size:9.5px;color:#a86a1a;">(qtà modificata, proposta ${r.qtaProposta})</span>` : ''}</td><td>${semaforoStatoOrdine(r.stato)}</td><td>${r.creatoDa}</td><td>${deleteActionCell('pr-'+r.numero, r.stato==='convertita' ? 'già convertita' : null)}</td></tr>`).join('')}
         </tbody>
       </table>
     </div>
@@ -4247,7 +4328,30 @@ let sortMIGO = { campo: null, asc: true };
 let draftQtaMIGO = {}; // { "ordine::indice": quantità inserita per il ricevimento parziale }
 // Ultimo ricevimento confermato in QUESTA sessione MIGO: permette di stampare subito il documento
 // di ingresso senza dover andare fino a MB51 a cercare la riga giusta.
-let ultimoRicevimentoMIGO = null; // { movimento, testo } oppure null
+let ultimoRicevimentoMIGO = null; // { movimento, testo } oppure { ricezione, testo } oppure null
+// Ricevimento di un DDT completo: tutte le righe (anche di ordini diversi dello stesso fornitore) in un'unica registrazione.
+// Ogni movimento porta lo stesso `ricezioneDocumento`, così c'è un solo documento e una sola stampa.
+// Non si usa il campo `documento` di MB1x: MBST li tratterebbe come documenti stornabili.
+let draftRicDDT = { fornitore: '', ddt: '', righe: {} }; // righe: { "ordine::indice": { sel:false se esclusa, qta } }
+function stampaRicezioneDDT(ric) {
+  const mov = movimentazioni.filter(m => m.ricezioneDocumento === ric).sort((a, b) => (a.ricezioneRiga || 0) - (b.ricezioneRiga || 0));
+  if (!mov.length) { setStatus('Impossibile stampare: ricevimento non trovato nello storico.', true); return; }
+  const t = mov[0];
+  const forn = fornitori.find(f => f.codice === t.fornitore);
+  const tot = mov.reduce((s, m) => s + Number(m.quantita), 0);
+  stampaDocumento(`
+    <h2 style="margin:0 0 4px 0;">Verbale di Ricevimento Merce — DDT ${t.ddtFornitore || '-'}</h2>
+    <p style="margin:0 0 12px 0; color:#666; font-size:12px;">Registrazione ${ric}</p>
+    <p style="margin:2px 0;"><strong>Fornitore:</strong> ${forn ? forn.codice + ' - ' + forn.ragioneSociale : (t.fornitore || '-')}</p>
+    <p style="margin:2px 0;"><strong>N. DDT fornitore:</strong> ${t.ddtFornitore || '-'}</p>
+    <p style="margin:2px 0;"><strong>Data ricevimento:</strong> ${t.creatoIl || t.data || '-'} · <strong>Ricevuto da:</strong> ${t.ricevutoDa || t.creatoDa || '-'}</p>
+    <table style="width:100%; border-collapse:collapse; font-size:12px; margin-top:10px;">
+      <thead><tr><th style="text-align:left; border-bottom:1px solid #999; padding:4px;">Riga</th><th style="text-align:left; border-bottom:1px solid #999; padding:4px;">Ordine d'acquisto</th><th style="text-align:left; border-bottom:1px solid #999; padding:4px;">Materiale</th><th style="text-align:right; border-bottom:1px solid #999; padding:4px;">Quantità ricevuta</th></tr></thead>
+      <tbody>${mov.map((m, i) => `<tr><td style="padding:4px; border-bottom:1px solid #ddd;">${m.ricezioneRiga || i + 1}</td><td style="padding:4px; border-bottom:1px solid #ddd;">${m.numeroOrdineRif || '-'}</td><td style="padding:4px; border-bottom:1px solid #ddd;">${materialeLabel(m.materiale)}</td><td style="padding:4px; border-bottom:1px solid #ddd; text-align:right;">${m.quantita}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td colspan="3" style="padding:4px; text-align:right;"><strong>Totale pezzi</strong></td><td style="padding:4px; text-align:right;"><strong>${tot}</strong></td></tr></tfoot>
+    </table>
+  `);
+}
 function renderMIGO(el) {
   const righeAperte = [];
   ordiniAcquisto.forEach(o => {
@@ -4275,8 +4379,36 @@ function renderMIGO(el) {
     });
   }
 
+  // ---- Pannello "Ricevi DDT completo" ----
+  const fornitoriAperti = [...new Set(righeAperte.map(r => r.fornitore))].sort();
+  if (draftRicDDT.fornitore && !fornitoriAperti.includes(draftRicDDT.fornitore)) draftRicDDT = { fornitore: '', ddt: '', righe: {} };
+  const righeForn = righeAperte.filter(r => r.fornitore === draftRicDDT.fornitore).sort((a, b) => a.ordine.localeCompare(b.ordine) || a.indice - b.indice);
+  const stRiga = r => draftRicDDT.righe[`${r.ordine}::${r.indice}`] || {};
+  const pannelloDDT = `
+    <div style="border:1px solid #b8c4d8; background:#f3f6fb; padding:8px; margin:0 0 12px 0;">
+      <strong style="font-size:11.5px;">Ricevi DDT completo</strong>
+      <span style="font-size:10.5px; color:#5a6470;"> — registra in una volta tutte le righe di un DDT del fornitore, con un solo documento e una sola stampa.</span>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+        <label style="font-size:11px;">Fornitore</label>
+        <select id="ric-forn" style="font-size:11px; padding:3px;"><option value="">-- scegli --</option>${fornitoriAperti.map(f => `<option value="${f}" ${f === draftRicDDT.fornitore ? 'selected' : ''}>${fornitoreLabel(f)}</option>`).join('')}</select>
+        <label style="font-size:11px;">N. DDT fornitore</label>
+        <input type="text" id="ric-ddt" value="${draftRicDDT.ddt}" placeholder="es. DDT-4521" style="width:120px; font-size:11px; padding:3px; border:1px solid #7f9db9;">
+        ${draftRicDDT.fornitore ? `<button class="actionbtn" id="ric-salva" style="padding:3px 10px; font-size:11px;">✔ Registra DDT completo</button>` : ''}
+      </div>
+      ${draftRicDDT.fornitore ? `
+      <div class="tablewrap" style="margin:8px 0 0 0;"><table>
+        <thead><tr><th>Incl.</th><th>N. ordine</th><th>Materiale</th><th>Ancora da ricevere</th><th>Qtà in questo DDT</th><th>Data consegna prevista</th></tr></thead>
+        <tbody>${righeForn.map(r => { const key = `${r.ordine}::${r.indice}`; const s = stRiga(r); return `
+          <tr><td><input type="checkbox" class="ric-sel" data-key="${key}" ${s.sel === false ? '' : 'checked'}></td>
+          <td>${r.ordine}</td><td>${materialeLabel(r.materiale)}</td><td style="font-weight:600;">${r.residuo}</td>
+          <td><input type="number" min="1" max="${r.residuo}" step="1" class="ric-qta" data-key="${key}" value="${s.qta !== undefined ? s.qta : r.residuo}" style="width:65px; font-size:11px; padding:3px; border:1px solid #7f9db9;"></td>
+          <td>${r.dataConsegna || ''}</td></tr>`; }).join('')}</tbody>
+      </table></div>
+      <p style="font-size:10.5px; color:#8a8a80; margin:4px 0 0 0;">Togli la spunta alle righe che non sono in questo DDT; riduci la quantità se è arrivato meno (la riga resta aperta per il resto).</p>` : ''}
+    </div>`;
   el.innerHTML = `
     <div class="formwrap" style="padding-bottom:0;">
+      ${pannelloDDT}
       <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Righe d'ordine d'acquisto ancora da ricevere, anche solo in parte. Puoi ricevere meno della quantità residua: la riga resta aperta per il resto. Inserisci il numero del DDT del fornitore prima di confermare, per tracciabilità: la giacenza viene aggiornata al conferma. Clicca su un'intestazione di colonna per ordinare. Lo storico dei ricevimenti già fatti si consulta in MB51.</p>
       ${ultimoRicevimentoMIGO ? `
         <div style="background:#eaf3ea; border:1px solid #b8d8b8; padding:6px 8px; margin:0 0 10px 0; font-size:11px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
@@ -4360,8 +4492,75 @@ function renderMIGO(el) {
   });
   const btnStampaUltimo = document.querySelector('.stampa-ultimo-migo');
   if (btnStampaUltimo) btnStampaUltimo.addEventListener('click', () => {
-    if (ultimoRicevimentoMIGO) stampaMovimentoRicevimento(ultimoRicevimentoMIGO.movimento);
+    if (!ultimoRicevimentoMIGO) return;
+    if (ultimoRicevimentoMIGO.ricezione) stampaRicezioneDDT(ultimoRicevimentoMIGO.ricezione);
+    else stampaMovimentoRicevimento(ultimoRicevimentoMIGO.movimento);
   });
+
+  // ---- Ricevi DDT completo ----
+  const selF = document.getElementById('ric-forn');
+  selF.addEventListener('change', e => { draftRicDDT = { fornitore: e.target.value, ddt: draftRicDDT.ddt, righe: {} }; renderScreenContent(); });
+  document.getElementById('ric-ddt').addEventListener('input', e => { draftRicDDT.ddt = e.target.value; });
+  document.querySelectorAll('.ric-sel').forEach(cb => cb.addEventListener('change', e => {
+    const k = e.target.dataset.key; draftRicDDT.righe[k] = { ...(draftRicDDT.righe[k] || {}), sel: e.target.checked };
+  }));
+  document.querySelectorAll('.ric-qta').forEach(inp => inp.addEventListener('input', e => {
+    const k = e.target.dataset.key; draftRicDDT.righe[k] = { ...(draftRicDDT.righe[k] || {}), qta: e.target.value };
+  }));
+  const btnRic = document.getElementById('ric-salva');
+  if (btnRic) btnRic.addEventListener('click', () => withGuard(async () => {
+    const d = draftRicDDT;
+    const ddt = (d.ddt || '').trim();
+    if (!d.fornitore) { setStatus('Scegli il fornitore del DDT.', true); return; }
+    if (!ddt) { setStatus('Inserisci il numero del DDT del fornitore prima di confermare il ricevimento.', true); return; }
+    // dati freschi: un'altra sessione potrebbe aver già ricevuto qualche riga
+    ordiniAcquisto = await loadList('ordiniAcquisto');
+    movimentazioni = await loadList('movimentazioni');
+    const scelte = [];
+    for (const o of ordiniAcquisto) {
+      if (o.fornitore !== d.fornitore) continue;
+      for (let i = 0; i < (o.righe || []).length; i++) {
+        const r = o.righe[i];
+        if (r._rimossa || rigaCompleta(r)) continue;
+        const key = `${o.numero}::${i}`; const s = d.righe[key] || {};
+        if (s.sel === false) continue;
+        const residuo = Number(r.quantita) - rigaQtaRicevuta(r);
+        const qta = s.qta !== undefined && s.qta !== '' ? Number(s.qta) : residuo;
+        if (!qta || qta <= 0 || !Number.isInteger(qta)) { setStatus(`${o.numero} / ${materialeLabel(r.materiale)}: la quantità deve essere un intero maggiore di zero.`, true); return; }
+        if (qta > residuo) { setStatus(`${o.numero} / ${materialeLabel(r.materiale)}: non puoi ricevere più della quantità residua (${residuo}).`, true); return; }
+        scelte.push({ o, i, r, qta });
+      }
+    }
+    if (!scelte.length) { setStatus('Nessuna riga selezionata da ricevere per questo fornitore.', true); return; }
+    const ric = 'RIC-' + Date.now().toString(36).toUpperCase();
+    const dataRicevimento = nowStr();
+    let fatte = 0;
+    for (const s of scelte) {
+      const nuova = rigaQtaRicevuta(s.r) + s.qta;
+      const completo = nuova >= Number(s.r.quantita);
+      // prima l'aggiornamento condiviso dell'ordine: se fallisce non si registra nessun movimento per questa riga
+      const ok = await applicaPatch('ordiniAcquisto', s.o.numero, { quantitaRicevuta: nuova, ricevuto: completo, ddtFornitore: ddt, dataRicevimento, ricevutoDa: currentUser }, { arrayField: 'righe', arrayIndex: s.i });
+      if (!ok) {
+        setStatus(`⚠️ Ricevimento interrotto alla riga ${s.o.numero} / ${materialeLabel(s.r.materiale)}: salvataggio sul server condiviso fallito. Righe già registrate: ${fatte} su ${scelte.length}. Controlla in MIGO cosa resta da ricevere e riprova con le righe rimaste.`, true);
+        if (fatte) ultimoRicevimentoMIGO = { ricezione: ric, testo: `Ricevimento DDT ${ddt} PARZIALE: ${fatte} righe su ${scelte.length}.` };
+        renderMain(); return;
+      }
+      s.r.quantitaRicevuta = nuova; s.r.ricevuto = completo; s.r.ddtFornitore = ddt; s.r.dataRicevimento = dataRicevimento; s.r.ricevutoDa = currentUser;
+      await registraMovimento({ materiale: s.r.materiale, locazioneDa: null, locazioneA: 'RICEZIONE', quantita: s.qta,
+        causale: (completo ? 'Ricevimento MIGO (' : 'Ricevimento MIGO parziale (') + s.o.numero + ', DDT ' + ddt + ')',
+        extra: { numeroOrdineRif: s.o.numero, fornitore: s.o.fornitore, ddtFornitore: ddt, ricevutoDa: currentUser, ricezioneDocumento: ric, ricezioneRiga: fatte + 1 } });
+      fatte++;
+    }
+    for (const num of [...new Set(scelte.map(s => s.o.numero))]) {
+      const o = ordiniAcquisto.find(x => x.numero === num);
+      if (o && o.righe.every(r => r._rimossa || rigaCompleta(r))) { o.stato = 'ricevuto'; await applicaPatch('ordiniAcquisto', num, { stato: 'ricevuto' }); }
+    }
+    const pezzi = scelte.reduce((t, s) => t + s.qta, 0);
+    draftRicDDT = { fornitore: '', ddt: '', righe: {} };
+    ultimoRicevimentoMIGO = { ricezione: ric, testo: `DDT ${ddt} ricevuto: ${scelte.length} righe, ${pezzi} pezzi (registrazione ${ric}).` };
+    setStatus(`DDT ${ddt} registrato: ${scelte.length} righe, ${pezzi} pezzi in RICEZIONE. Stampa il verbale con il pulsante in alto. Sposta il materiale prima di usarlo in produzione.`);
+    renderMain();
+  }));
 }
 
 // ============ MMBE (vista giacenze) ============
@@ -5004,7 +5203,7 @@ function renderMovList(el) {
             // che rispetti l'esatto formato "(numero, DDT ...)" a fine stringa — così un formato
             // leggermente diverso (dati storici, o modifiche future alla causale) non fa più
             // sparire il pulsante di stampa.
-            const stampaCell = m.documento ? `<span class="print-btn stampa-doc-mb51" data-documento="${m.documento}">🖶 stampa doc.</span>` : /^Ricevimento MIGO/.test(m.causale||'') ? `<span class="print-btn stampa-ric-mb51" data-movimento="${m.numero}">🖶 stampa</span>` : '';
+            const stampaCell = m.documento ? `<span class="print-btn stampa-doc-mb51" data-documento="${m.documento}">🖶 stampa doc.</span>` : m.ricezioneDocumento ? `<span class="print-btn stampa-ricddt-mb51" data-ric="${m.ricezioneDocumento}">🖶 stampa DDT</span>` : /^Ricevimento MIGO/.test(m.causale||'') ? `<span class="print-btn stampa-ric-mb51" data-movimento="${m.numero}">🖶 stampa</span>` : '';
             return `<tr><td>${m.numero}</td><td>${m.documento||'-'}</td><td>${m.tipoMov||'-'}</td><td>${materialeLabel(m.materiale)}</td><td>${m.tipo}</td><td>${m.locazioneDa||'-'}</td><td>${m.locazioneA||'-'}</td><td>${m.quantita}</td><td>${m.controparte||'-'}</td><td>${m.causale}</td><td>${m.creatoIl}</td><td>${m.creatoDa}</td><td>${stampaCell}</td></tr>`;
           }).join('')}
         </tbody>
@@ -5013,6 +5212,9 @@ function renderMovList(el) {
   `;
   document.querySelectorAll('.stampa-doc-mb51').forEach(elx => {
     elx.addEventListener('click', () => stampaDocumentoMateriale(elx.dataset.documento));
+  });
+  document.querySelectorAll('.stampa-ricddt-mb51').forEach(elx => {
+    elx.addEventListener('click', () => stampaRicezioneDDT(elx.dataset.ric));
   });
   document.querySelectorAll('.stampa-ric-mb51').forEach(elx => {
     elx.addEventListener('click', () => stampaMovimentoRicevimento(elx.dataset.movimento));
@@ -5463,6 +5665,7 @@ function renderMM03(el) {
     { campo:'um', label:'UM' },
     { campo:'giacenza', label:'Giacenza', get:m=>getGiacenza(m.codice) },
     { campo:'gruppoProdotti', label:'Gruppo prodotti', get:m=>m.gruppoProdotti||'-' },
+    { campo:'pianificatore', label:'Pianificatore', get:m=>m.tipo==='MP'?(m.pianificatore||'-'):'-' },
     { campo:'tipoMRP', label:'Tipo MRP', get:m=>m.tipo==='MP'?(m.tipoMRP||'PD'):'-' },
     { campo:'politicaLotto', label:'Politica lotto', get:m=>m.tipo==='MP'?(m.politicaLotto||'EX'):'-' },
     { campo:'creatoDa', label:'Creato da' },
@@ -5485,7 +5688,7 @@ function renderMM03(el) {
         <thead><tr>${colonne.map(c => `<th class="mm03-sort-th" data-campo="${c.campo}" style="cursor:pointer; user-select:none;" title="Clicca per ordinare">${c.label}${sortMM03.campo===c.campo ? (sortMM03.asc?' ▲':' ▼') : ''}</th>`).join('')}<th>Azioni</th></tr></thead>
         <tbody>
           ${elenco.length === 0 ? `<tr><td colspan="${colonne.length+1}" style="text-align:center; color:#9a9a8f; padding:16px;">Nessun materiale in anagrafica. Usa MM01 per crearne uno.</td></tr>` :
-            elenco.map(m => `<tr><td>${m.codice}</td><td>${m.descrizione}</td><td>${m.tipo==='MP'?'Materia Prima':'Prodotto Finito'}</td><td>${m.um}</td><td>${getGiacenza(m.codice)}</td><td>${m.gruppoProdotti||'-'}</td><td>${m.tipo==='MP'?(m.tipoMRP||'PD'):'-'}</td><td>${m.tipo==='MP'?(m.politicaLotto||'EX'):'-'}</td><td>${m.creatoDa}</td><td>${m.creatoIl}</td><td>${deleteActionCell('mat-'+m.codice, materialeInUso(m.codice) ? 'in uso, non eliminabile' : null)}</td></tr>`).join('')}
+            elenco.map(m => `<tr><td>${m.codice}</td><td>${m.descrizione}</td><td>${m.tipo==='MP'?'Materia Prima':'Prodotto Finito'}</td><td>${m.um}</td><td>${getGiacenza(m.codice)}</td><td>${m.gruppoProdotti||'-'}</td><td>${m.tipo==='MP'?(m.pianificatore||'-'):'-'}</td><td>${m.tipo==='MP'?(m.tipoMRP||'PD'):'-'}</td><td>${m.tipo==='MP'?(m.politicaLotto||'EX'):'-'}</td><td>${m.creatoDa}</td><td>${m.creatoIl}</td><td>${deleteActionCell('mat-'+m.codice, materialeInUso(m.codice) ? 'in uso, non eliminabile' : null)}</td></tr>`).join('')}
         </tbody>
       </table>
     </div>
