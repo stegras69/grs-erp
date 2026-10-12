@@ -102,7 +102,30 @@ begin
 end $$;
 
 create or replace function public._ora_it() returns text
-language sql stable as $$ select to_char(now() at time zone 'Europe/Rome', 'DD/MM/YYYY HH24:MI') $$;
+language sql stable set search_path = public as $$ select to_char(now() at time zone 'Europe/Rome', 'DD/MM/YYYY HH24:MI') $$;
+
+create or replace function public._docente_pulisci_sessioni() returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  delete from docente_sessioni where not (scade >= now());
+end $$;
+create or replace function public._docente_pulisci_tentativi() returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  delete from docente_tentativi where not (ts >= now() - make_interval(days => 30));
+end $$;
+create or replace function public._docente_pulisci_storico() returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  delete from storage_storico where not (ts >= now() - make_interval(days => 30));
+end $$;
+create or replace function public._docente_manutenzione() returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  perform _docente_pulisci_tentativi();
+  perform _docente_pulisci_storico();
+  perform _docente_pulisci_sessioni();
+end $$;
 
 create or replace function public.docente_accesso(p_pin1 text, p_pin2 text, p_dispositivo text) returns jsonb
 language plpgsql security definer set search_path = public, extensions as $$
@@ -121,10 +144,7 @@ begin
     insert into docente_tentativi (dispositivo, ok) values (v_disp, true);
     v_tok := encode(gen_random_bytes(24), 'hex');
     insert into docente_sessioni (token, scade, dispositivo) values (v_tok, now() + interval '12 hours', v_disp);
-    -- manutenzione
-    delete from docente_sessioni where scade < now();
-    delete from docente_tentativi where ts < now() - interval '30 days';
-    delete from storage_storico where ts < now() - interval '30 days';
+    perform _docente_manutenzione();
     if v_disp is not null then
       insert into storage (key, value, updated_at)
         values ('dispositiviFidati::' || v_disp, jsonb_build_object('dal', _ora_it())::text, now())
@@ -181,7 +201,7 @@ begin
   insert into docente_config (id, pin_hash, aggiornato) values (1, crypt(p_pin1 || ':' || p_pin2, gen_salt('bf')), now())
     on conflict (id) do update set pin_hash = excluded.pin_hash, aggiornato = now();
   -- chiude tutte le altre sessioni docente aperte
-  delete from docente_sessioni where token <> p_token;
+  delete from docente_sessioni where token is distinct from p_token;
 end $$;
 
 create or replace function public.docente_storico(p_token text, p_filtro text) returns jsonb
@@ -214,10 +234,11 @@ begin
 end $$;
 
 -- ---------- Permessi sulle funzioni ----------
-revoke execute on function public._storage_storico_trg(), public._docente_verifica(text), public._ora_it() from public, anon, authenticated;
+revoke execute on function public._storage_storico_trg(), public._docente_verifica(text), public._ora_it(), public._docente_manutenzione(),
+  public._docente_pulisci_sessioni(), public._docente_pulisci_tentativi(), public._docente_pulisci_storico() from public, anon, authenticated;
 revoke execute on function public.docente_accesso(text, text, text), public.docente_esci(text), public.docente_scrivi(text, jsonb),
   public.docente_elimina(text, text[]), public.docente_cambia_pin(text, text, text), public.docente_storico(text, text),
-  public.docente_versione(text, bigint), public.docente_ripristina_versione(text, bigint) from public;
+  public.docente_versione(text, bigint), public.docente_ripristina_versione(text, bigint) from public, authenticated;
 grant execute on function public.docente_accesso(text, text, text), public.docente_esci(text), public.docente_scrivi(text, jsonb),
   public.docente_elimina(text, text[]), public.docente_cambia_pin(text, text, text), public.docente_storico(text, text),
   public.docente_versione(text, bigint), public.docente_ripristina_versione(text, bigint) to anon;
