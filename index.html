@@ -9,8 +9,8 @@
   :root { --header-h: 116px; --screen-top-h: 0px; }
   html, body { margin:0; padding:0; min-height:100%; font-family: Tahoma,"Segoe UI",Arial,sans-serif; font-size:11.5px; background:#ece9d8; color:#1a1a1a; }
   #app { display:flex; flex-direction:column; min-height:100vh; min-height:100dvh; }
-  .app-header-sticky { position:sticky; top:0; z-index:200; display:flex; flex-direction:column; background:#ece9d8; }
-  .screen-sticky-top { position:sticky; top: var(--header-h); z-index:150; background:#ece9d8; }
+  .app-header-sticky { position:-webkit-sticky; position:sticky; top:0; z-index:200; display:flex; flex-direction:column; background:#ece9d8; }
+  .screen-sticky-top { position:-webkit-sticky; position:sticky; top: var(--header-h); z-index:150; background:#ece9d8; }
 
   .titlebar { display:flex; align-items:center; justify-content:space-between; padding:3px 8px; background:linear-gradient(to right,#00335c,#1b5c96); color:white; }
   .titlebar-left { display:flex; align-items:center; gap:6px; }
@@ -38,8 +38,8 @@
   .banner .user-badge { font-size:11px; color:#3a5a8c; font-weight:600; }
 
   .body { display:flex; align-items:flex-start; }
-  .sidebar { width:300px; flex-shrink:0; background:white; border-right:1px solid #8f8f8f; display:flex; flex-direction:column; position:sticky; top: var(--header-h); max-height: calc(100vh - var(--header-h)); max-height: calc(100dvh - var(--header-h)); overflow-y:auto; }
-  .sidebar-header { display:flex; align-items:center; gap:6px; padding:5px 8px; background:#e5e0cc; border-bottom:1px solid #c8c2a8; font-weight:600; color:#4a4a4a; font-size:11px; position:sticky; top:0; z-index:5; }
+  .sidebar { width:300px; flex-shrink:0; background:white; border-right:1px solid #8f8f8f; display:flex; flex-direction:column; position:-webkit-sticky; position:sticky; top: var(--header-h); max-height: calc(100vh - var(--header-h)); max-height: calc(100dvh - var(--header-h)); overflow-y:auto; }
+  .sidebar-header { display:flex; align-items:center; gap:6px; padding:5px 8px; background:#e5e0cc; border-bottom:1px solid #c8c2a8; font-weight:600; color:#4a4a4a; font-size:11px; position:-webkit-sticky; position:sticky; top:0; z-index:5; }
   .tree { padding:4px 0; }
   .tnode { display:flex; align-items:center; gap:4px; padding:2.5px 8px; cursor:default; user-select:none; white-space:nowrap; }
   .tnode:hover { background:#d7e6f7; }
@@ -82,7 +82,7 @@
      tabella (es. "LINEA 1") resti incollata in cima e "inglobi" visivamente le righe delle tabelle
      successive che scorrono sotto. La classe .tablewrap-sticky-head viene assegnata via JS solo
      alla prima .tablewrap della schermata (applicaLayoutSticky). */
-  .tablewrap-sticky-head thead th { position:sticky; top: calc(var(--header-h) + var(--screen-top-h)); z-index:50; }
+  .tablewrap-sticky-head thead th { position:-webkit-sticky; position:sticky; top: calc(var(--header-h) + var(--screen-top-h)); z-index:50; }
   td { padding:4px 8px; border-bottom:1px solid #e0ddce; border-right:1px solid #e0ddce; }
   tr:hover td { background:#f4f4ee; }
   .rowaction { color:#2e5aa8; cursor:pointer; text-decoration:underline; font-size:10.5px; margin-right:8px; }
@@ -94,7 +94,7 @@
   .msg-err { color:#a83232; font-weight:600; }
 
   /* Login overlay */
-  .login-overlay { position:fixed; inset:0; background:#00335c; display:flex; align-items:center; justify-content:center; z-index:999; }
+  .login-overlay { position:fixed; top:0; right:0; bottom:0; left:0; background:#00335c; display:flex; align-items:center; justify-content:center; z-index:999; }
   .login-box { background:#ece9d8; border:2px solid #7f9db9; padding:24px 28px; width:320px; box-shadow:0 8px 24px rgba(0,0,0,.3); }
   .login-box h2 { margin:0 0 4px 0; font-size:15px; color:#1a1a1a; }
   .login-box p { margin:0 0 16px 0; font-size:11px; color:#5a6470; }
@@ -110,7 +110,7 @@
   .semaforo-rosso { background: radial-gradient(circle at 30% 30%, #ff8a8a, #b0201f); }
   .stato-badge { display:inline-flex; align-items:center; font-weight:600; }
   .print-btn { color:#2e5aa8; cursor:pointer; text-decoration:underline; font-size:10.5px; }
-  #print-area { position:fixed; inset:0; background:#c7c7c7; overflow:auto; z-index:2000; }
+  #print-area { position:fixed; top:0; right:0; bottom:0; left:0; background:#c7c7c7; overflow:auto; z-index:2000; }
   @media print {
     body * { visibility: hidden; }
     #print-area, #print-area * { visibility: visible; }
@@ -129,7 +129,7 @@
   .f4-field-row input { flex:1; cursor:pointer; background:#fbfbf6; }
   .f4-field-btn { background:#dfe6f0; border:1px solid #7f9db9; cursor:pointer; padding:2px 9px; font-size:12px; font-weight:600; color:#2e4a72; }
   .f4-field-btn:hover { background:#c9d6ea; }
-  .f4-overlay { position:fixed; inset:0; background:rgba(20,20,15,0.4); z-index:3000; display:flex; align-items:flex-start; justify-content:center; padding-top:12vh; }
+  .f4-overlay { position:fixed; top:0; right:0; bottom:0; left:0; background:rgba(20,20,15,0.4); z-index:3000; display:flex; align-items:flex-start; justify-content:center; padding-top:12vh; }
   .f4-popup { background:#ece9d8; border:2px solid #3a5a8c; width:460px; max-width:92vw; max-height:70vh; display:flex; flex-direction:column; box-shadow:0 8px 28px rgba(0,0,0,0.45); }
   .f4-popup-header { background:#3a5a8c; color:white; padding:6px 10px; font-weight:600; font-size:12px; display:flex; justify-content:space-between; align-items:center; }
   .f4-popup-header .f4-close { cursor:pointer; padding:0 4px; }
@@ -196,6 +196,22 @@ const remoteStorage = {
   // Legge in UN SOLO viaggio di rete tutte le chiavi che iniziano con "prefix".
   // Ritorna una mappa { chiave: valoreStringaJSON }. Usato per caricare tutto un corso in un colpo solo.
   async getPrefix(prefix) {
+    // Per risparmiare traffico (la quota di download di Firebase si esaurisce) chiede al database SOLO le chiavi
+    // che iniziano con il prefisso (query su $key, che non richiede indici). Se la query non va a buon fine, o
+    // restituisce vuoto per un prefisso di corso, ripiega sul vecchio metodo: scarica tutto e filtra qui.
+    try {
+      const q = '?orderBy=' + encodeURIComponent('"$key"') + '&startAt=' + encodeURIComponent('"' + prefix + '"')
+        + '&endAt=' + encodeURIComponent('"' + prefix + '\uf8ff"') + '&_=' + Date.now();
+      const r = await fetch(FIREBASE_URL + '/storage.json' + q, { cache: 'no-store' });
+      if (r.ok) {
+        const parziale = await r.json();
+        if (parziale === null || (typeof parziale === 'object' && !parziale.error)) {
+          const m = {};
+          for (const kc in (parziale || {})) { const k = decodeURIComponent(kc); if (k.indexOf(prefix) === 0) m[k] = JSON.stringify(parziale[kc]); }
+          if (Object.keys(m).length > 0 || prefix.indexOf('corso_') !== 0) return m;
+        }
+      }
+    } catch (e) { /* si ripiega sul metodo completo */ }
     const res = await fetch(FIREBASE_URL + '/storage.json?_=' + Date.now(), { cache: 'no-store' });
     await _verificaRisposta(res, 'lettura elenco', prefix);
     const tutto = (await res.json()) || {};
@@ -222,19 +238,24 @@ const remoteStorage = {
 // All'apertura del corso (e a ogni 🔄 aggiorna) scarichiamo TUTTE le chiavi del corso
 // in una volta sola e le teniamo qui; getRaw le legge da qui invece che dalla rete.
 let _cacheCorso = null; // null = non ancora caricata; altrimenti { chiave: valoreStringa }
+let _ultimoScaricoCache = null;
 async function caricaCacheCorso() {
   if (!STORAGE_CONFIGURATO || !currentCorso) { _cacheCorso = {}; return; }
   const MAX_TENTATIVI = 3;
   for (let tentativo = 1; tentativo <= MAX_TENTATIVI; tentativo++) {
     try {
       _cacheCorso = await remoteStorage.getPrefix('corso_' + currentCorso + '::');
+      _ultimoScaricoCache = new Date();
       storageOk = true;
       return;
     } catch (e) {
       if (tentativo === MAX_TENTATIVI) {
         _diagRegistraErrore('lettura-blocco', 'corso_' + currentCorso + '::*', e);
         storageOk = false;
-        _cacheCorso = {}; // in caso di errore, i singoli getRaw faranno comunque da rete/fallback
+        // ATTENZIONE: un oggetto vuoto è "vero" per getRaw, che lo prenderebbe per un corso senza dati e mostrerebbe
+        // tutto vuoto (era la causa di dati che "spariscono" quando il download fallisce). Quindi: se c'è già una copia
+        // precedente con dei dati la si tiene; altrimenti si azzera la cache, così getRaw legge chiave per chiave dalla rete.
+        if (!_cacheCorso || Object.keys(_cacheCorso).length === 0) _cacheCorso = null;
       } else {
         await attesa(250 * tentativo + Math.random() * 150);
       }
@@ -1370,7 +1391,7 @@ function renderLogin() {
         </div>
         <p>Corso: <strong>${currentCorso}</strong> — <span id="cambia-corso" style="color:#2e5aa8; text-decoration:underline; cursor:pointer; font-weight:400;">cambia corso</span></p>
         <p>Inserisci il tuo nome per iniziare</p>
-        <input type="text" id="login-name" placeholder="Nome corsista (es. Mario Rossi)" autocomplete="off">
+        <input type="text" id="login-name" name="sigla-corsista-erp" placeholder="Sigla o nome comune (es. MROSSI)" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-form-type="other">
         <button id="login-btn">Accedi</button>
         <div class="login-note">Ogni documento che crei verrà tracciato con il tuo nome. I dati sono condivisi con tutti i corsisti collegati a questo stesso codice corso.</div>
       </div>
@@ -1448,7 +1469,7 @@ function attachTreeEvents() {
       } else {
         const scr = el.getAttribute('data-screen');
         const isActive = el.classList.contains('clickable');
-        if (scr && isActive) { screen = scr; statusMsg=""; renderMain(); }
+        if (scr && isActive) { cambiaSchermata(scr); }
       }
     });
   });
@@ -1465,6 +1486,42 @@ function attachTreeEvents() {
 }
 
 // ============ MAIN RENDER ============
+// Riscarica i dati condivisi del corso. I dati letti sono una copia scaricata al login: senza questo
+// aggiornamento un dispositivo non vede ordini, distinte e movimenti creati dopo il suo accesso.
+// Chiamata a ogni cambio di schermata (al massimo una volta ogni 4 secondi, salvo forzatura).
+let _ultimoAggiornamentoDati = 0;
+async function aggiornaDatiCondivisi(forza) {
+  if (!forza && Date.now() - _ultimoAggiornamentoDati < 4000) return;
+  _ultimoAggiornamentoDati = Date.now();
+  try {
+    await caricaCacheCorso();
+    materiali = await loadList('materiali');
+    fornitori = await loadList('fornitori');
+    clienti = await loadList('clienti');
+    distinte = await loadList('distinte');
+    ordiniVendita = await loadList('ordiniVendita');
+    ordiniProduzione = await loadList('ordiniProduzione');
+    lineeProduzione = await loadList('lineeProduzione');
+    assegnazioni = await loadList('assegnazioni');
+    richiesteAcquisto = await loadList('richiesteAcquisto');
+    ordiniAcquisto = await loadList('ordiniAcquisto');
+    fornitoriMateriale = await loadList('fornitoriMateriale');
+    consegne = await loadList('consegne');
+    locazioni = await loadList('locazioni');
+    movimentazioni = await loadList('movimentazioni');
+    erroriMovimenti = await loadList('erroriMovimenti');
+    preferiti = await loadList('preferiti', false);
+    const { out } = normalizzaOrdiniVendita(ordiniVendita);
+    ordiniVendita = out;
+  } catch (e) { /* in caso di errore di rete si continua con i dati già presenti */ }
+}
+async function cambiaSchermata(nuova) {
+  // Nessun riscaricamento automatico a ogni cambio di schermata (consumerebbe la quota di download di Firebase):
+  // i dati si aggiornano con 🔄 e prima di "Esegui MRP".
+  screen = nuova; statusMsg = '';
+  renderMain();
+}
+
 function renderMain() {
   const app = document.getElementById('app');
   const titleMap = {
@@ -1563,46 +1620,37 @@ function renderMain() {
     </div>
   `;
 
-  document.getElementById('btn-back').addEventListener('click', () => { screen='easy'; statusMsg=''; renderMain(); });
-  document.getElementById('btn-close').addEventListener('click', () => { screen='easy'; statusMsg=''; renderMain(); });
+  document.getElementById('btn-back').addEventListener('click', () => { cambiaSchermata('easy'); });
+  document.getElementById('btn-close').addEventListener('click', () => { cambiaSchermata('easy'); });
   document.getElementById('btn-logout').addEventListener('click', () => {
     if (logoutConfirm) { currentUser = null; logoutConfirm = false; _cancellaSessioneDispositivo(); renderLogin(); }
     else { logoutConfirm = true; setStatus('Clicca di nuovo su 🚪 per confermare l\'uscita e tornare al login.', true); }
   });
   document.getElementById('btn-refresh').addEventListener('click', async () => {
     setStatus('Aggiornamento in corso…');
-    await caricaCacheCorso();
-    materiali = await loadList('materiali');
-    fornitori = await loadList('fornitori');
-    clienti = await loadList('clienti');
-    distinte = await loadList('distinte');
-    ordiniVendita = await loadList('ordiniVendita');
-    ordiniProduzione = await loadList('ordiniProduzione');
-    lineeProduzione = await loadList('lineeProduzione');
-    assegnazioni = await loadList('assegnazioni');
-    richiesteAcquisto = await loadList('richiesteAcquisto');
-    ordiniAcquisto = await loadList('ordiniAcquisto');
-    fornitoriMateriale = await loadList('fornitoriMateriale');
-    consegne = await loadList('consegne');
-    locazioni = await loadList('locazioni');
-    movimentazioni = await loadList('movimentazioni');
-    erroriMovimenti = await loadList('erroriMovimenti');
-    preferiti = await loadList('preferiti', false);
-    const { out } = normalizzaOrdiniVendita(ordiniVendita);
-    ordiniVendita = out;
-    setStatus('Dati aggiornati dallo storage condiviso.');
+    await aggiornaDatiCondivisi(true);
+    if (storageOk) setStatus('Dati aggiornati dallo storage condiviso.');
+    else setStatus('⚠️ Aggiornamento NON riuscito: server dati non raggiungibile. Restano i dati di prima, riprova tra poco.', true);
   });
   const txInput = document.getElementById('tx-input');
   txInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       const code = e.target.value.trim().toUpperCase();
-      if (isActiveScreenCode(code)) { screen = code; statusMsg = ''; renderMain(); }
+      if (isActiveScreenCode(code)) { cambiaSchermata(code); }
       else setStatus(`Transazione "${code}" non valida o non attiva.`, true);
     }
   });
   attachTreeEvents();
   renderScreenContent();
+  // Safari: dopo il cambio schermata riporta in alto e forza il ridisegno dell'intestazione sticky,
+  // altrimenti può restare "ferma" sulla schermata precedente.
+  try {
+    if (screen !== _ultimaSchermataRender) { window.scrollTo(0, 0); _ultimaSchermataRender = screen; }
+    const hs = document.querySelector('.app-header-sticky');
+    if (hs) { hs.style.webkitTransform = 'translateZ(0)'; void hs.offsetHeight; }
+  } catch (e) {}
 }
+let _ultimaSchermataRender = null;
 
 function isActiveScreenCode(code) {
   function search(nodes) {
@@ -1962,7 +2010,7 @@ function collegaF4(id, titolo, items, onSelect) {
 function stampaDocumento(corpoHTML) {
   const area = document.getElementById('print-area');
   area.innerHTML = `
-    <div class="print-toolbar" style="position:sticky; top:0; display:flex; justify-content:flex-end; gap:8px; background:#ece9d8; border-bottom:1px solid #b5b5b5; padding:8px; z-index:10;">
+    <div class="print-toolbar" style="position:-webkit-sticky; position:sticky; top:0; display:flex; justify-content:flex-end; gap:8px; background:#ece9d8; border-bottom:1px solid #b5b5b5; padding:8px; z-index:10;">
       <button id="print-now" class="actionbtn" style="padding:6px 14px;">🖶 Stampa / Salva PDF</button>
       <button id="print-close" class="actionbtn" style="padding:6px 14px;">✕ Chiudi anteprima</button>
     </div>
@@ -3363,6 +3411,9 @@ function htmlRisultatiMRP(ris) {
     </div>`;
 }
 async function eseguiMRPDaSchermata(draft) {
+  // I dati letti sono una copia scaricata al login o con 🔄: prima di calcolare l'MRP la riscarico, così tutti
+  // i dispositivi lavorano sugli stessi ordini di vendita, distinte e giacenze appena inseriti dagli altri.
+  await caricaCacheCorso();
   const ris = draft === draftMD02 ? await calcolaRisultatiMD02(draft.materiale, draft.modalita) : await calcolaRisultatiMRP(draft.materiale, draft.modalita, draft.pianificatori);
   if (draft.mostra) { draft.risultato = ris; renderScreenContent(); return; }
   const out = await salvaRisultatiMRP(ris);
@@ -3440,6 +3491,36 @@ function renderMD01(el) {
 }
 
 // ============ MD02 (esecuzione MRP multilivello - singolo prodotto) ============
+// Diagnostica (solo lettura): mostra i dati che QUESTO dispositivo usa per il calcolo. Serve a confrontare
+// due PC quando il risultato di MD02 è diverso.
+async function riempiDiagnosticaMD02(d) {
+  const box = document.getElementById('md02-diag'); if (!box) return;
+  let partecipanti = [];
+  try { partecipanti = await elencoPartecipanti(); } catch (e) {}
+  const nChiavi = _cacheCorso ? Object.keys(_cacheCorso).length : 0;
+  const scarico = _ultimoScaricoCache ? _ultimoScaricoCache.toLocaleTimeString('it-IT') : 'mai';
+  let dettaglio = '';
+  if (d.materiale) {
+    const pf = d.materiale;
+    const ov = [];
+    ordiniVendita.filter(o => o.stato !== 'evaso').forEach(o => (o.righe || []).forEach(r => {
+      if (r.prodotto === pf) ov.push(`${o.numero} (residuo ${Number(r.quantita) - Number(r.consegnato || 0)}, di ${o.creatoDa || '?'})`);
+    }));
+    const odp = ordiniProduzione.filter(o => o.prodotto === pf && o.stato === 'aperto').map(o => `${o.numero} (q.tà ${o.quantita}, di ${o.creatoDa || '?'})`);
+    const bom = getBOM(pf);
+    dettaglio = `<br>Prodotto <strong>${pf}</strong> · giacenza ${getGiacenza(pf)}
+      <br>Ordini di vendita non evasi: ${ov.length ? ov.join('; ') : '<em>nessuno</em>'}
+      <br>Ordini di produzione aperti: ${odp.length ? odp.join('; ') : '<em>nessuno</em>'}
+      <br>Distinta base: ${bom ? bom.componenti.map(c => c.codice + ' x' + c.qta).join(', ') : '<em>non trovata</em>'}`;
+  }
+  box.innerHTML = `<div style="margin:10px; padding:6px 8px; border:1px dashed #b5b5b5; font-size:10.5px; color:#5a6470; background:#fafaf5;">
+    <strong>Diagnostica dati di questo dispositivo</strong> (per confrontare due PC)
+    <br>Corso <strong>${currentCorso}</strong> · utente ${currentUser} · ultimo download dati: ${scarico} · ${nChiavi} chiavi
+    <br>Partecipanti trovati (${partecipanti.length}): ${partecipanti.map(p => p.nome || p.shard).join(', ')}
+    <br>Ordini di vendita ${ordiniVendita.length} · ordini di produzione ${ordiniProduzione.length} · movimenti ${movimentazioni.length} · materiali ${materiali.length}${dettaglio}
+  </div>`;
+}
+
 function renderMD02(el) {
   const d = draftMD02;
   const prodotti = materiali.filter(m => m.tipo === 'PF' && getBOM(m.codice));
@@ -3456,7 +3537,9 @@ function renderMD02(el) {
       ${prodotti.length === 0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun prodotto finito con distinta base. Crea prima la BOM in CS01.</p>' : ''}
     </div>
     ${d.risultato ? htmlRisultatiMRP(d.risultato) : ''}
+    <div id="md02-diag"></div>
   `;
+  riempiDiagnosticaMD02(d);
   collegaF4('f-materiale-md02', 'Cerca prodotto finito', prodotti.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
     d.materiale = valore; d.risultato = null; renderScreenContent();
   });
@@ -5495,7 +5578,7 @@ function renderCruscotto(el) {
     </div>
   `;
   document.querySelectorAll('.kpi-card').forEach(card => {
-    card.addEventListener('click', () => { screen = card.dataset.screen; statusMsg=''; renderMain(); });
+    card.addEventListener('click', () => { cambiaSchermata(card.dataset.screen); });
   });
 }
 
