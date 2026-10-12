@@ -140,6 +140,48 @@
   .f4-popup-row { padding:5px 10px; font-size:11.5px; cursor:pointer; border-bottom:1px solid #eee; }
   .f4-popup-row:nth-child(even) { background:#f7f7f2; }
   .f4-popup-row:hover { background:#dfe6f0; }
+
+  /* ---- Pannello docente ---- */
+  .doc-wrap { min-height:100vh; background:#ece9d8; display:flex; flex-direction:column; }
+  .doc-tabs { display:flex; flex-wrap:wrap; gap:2px; padding:6px 8px 0 8px; background:#ece9d8; border-bottom:1px solid #8f8f8f; position:sticky; top:0; z-index:5; }
+  .doc-tab { padding:6px 12px; border:1px solid #b5b5b5; border-bottom:none; background:#dcd8c4; cursor:pointer; font-size:11.5px; border-radius:3px 3px 0 0; }
+  .doc-tab:hover { background:#d7e6f7; }
+  .doc-tab.attiva { background:#f7f5ec; font-weight:700; border-color:#8f8f8f; position:relative; top:1px; }
+  .doc-body { padding:12px; max-width:1100px; width:100%; box-sizing:border-box; margin:0 auto; }
+  .doc-card { background:#f7f5ec; border:1px solid #d4d0c0; padding:10px 12px; margin-bottom:12px; }
+  .doc-card h3 { margin:0 0 6px 0; font-size:12.5px; }
+  .doc-card p { margin:4px 0 8px 0; }
+  .doc-sub { font-size:10.5px; color:#8a8a80; }
+  .doc-riga { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:6px 0; }
+  .doc-riga input[type=text], .doc-riga select, .doc-conferma input[type=text], .doc-campo input { padding:6px; font-size:11.5px; border:1px solid #7f9db9; font-family:inherit; min-width:200px; }
+  .doc-conferma input[type=text] { width:100%; margin:4px 0 8px 0; box-sizing:border-box; }
+  .doc-campo { display:block; margin:6px 0; }
+  .doc-btn { padding:6px 12px; font-size:11.5px; font-weight:600; background:#2e5aa8; color:white; border:1px solid #1f3a5f; cursor:pointer; font-family:inherit; }
+  .doc-btn:hover { filter:brightness(1.1); }
+  .doc-btn:disabled { opacity:.5; cursor:default; }
+  .doc-btn.verde { background:#1a6b2e; border-color:#12501f; }
+  .doc-btn.rosso { background:#a83232; border-color:#7a2020; }
+  .doc-btn.grigio { background:#8a8a80; border-color:#6a6a60; }
+  .doc-scroll { overflow-x:auto; max-height:520px; overflow-y:auto; }
+  .doc-table { width:100%; border-collapse:collapse; font-size:11px; background:white; }
+  .doc-table th { text-align:left; background:#e5e0cc; border-bottom:1px solid #c8c2a8; padding:5px 6px; position:sticky; top:0; white-space:nowrap; }
+  .doc-table td { border-bottom:1px solid #eee; padding:5px 6px; vertical-align:top; }
+  .doc-table .num { text-align:right; }
+  .doc-table.interna { background:#fbfaf5; }
+  .doc-dettaglio > td { background:#fbfaf5; }
+  .doc-azioni { white-space:nowrap; }
+  .doc-azioni .print-btn { margin-right:8px; }
+  .doc-pill { display:inline-block; padding:1px 6px; border-radius:8px; font-size:10px; font-weight:600; white-space:nowrap; }
+  .doc-pill.verde { background:#d6efd9; color:#1a6b2e; } .doc-pill.giallo { background:#f6ecc9; color:#8a6a10; }
+  .doc-pill.grigio { background:#e6e4dc; color:#6a6a60; } .doc-pill.rosso { background:#f4d6d6; color:#a83232; } .doc-pill.blu { background:#dbe5f5; color:#2e5aa8; }
+  .doc-conferma { border:1px solid #a83232; background:#fff7f7; padding:8px 10px; margin-top:8px; }
+  .doc-conferma.blu { border-color:#2e5aa8; background:#f5f8fd; }
+  .doc-conferma ul { margin:0 0 8px 18px; padding:0; }
+  .doc-avviso { border:1px solid #d9b65a; background:#fbf3dc; padding:8px 10px; margin:8px 0 12px 0; font-size:11px; }
+  .doc-msg { border:1px solid #1a6b2e; background:#e7f4e9; color:#1a6b2e; padding:8px 10px; margin-bottom:12px; font-weight:600; }
+  .doc-msg.err { border-color:#a83232; background:#fbeaea; color:#a83232; }
+  .doc-progresso { border:1px solid #2e5aa8; background:#eef3fb; color:#2e5aa8; padding:8px 10px; margin-bottom:12px; }
+  @media (max-width: 640px) { .doc-body { padding:8px; } .doc-riga input[type=text], .doc-riga select { min-width:0; width:100%; } .doc-tab { padding:5px 8px; } }
 </style>
 </head>
 <body>
@@ -238,6 +280,12 @@ const remoteStorageFirebase = {
   async delete(key) {
     const res = await fetch(_firebasePath(key), { method: 'DELETE' });
     await _verificaRisposta(res, 'eliminazione', key);
+  },
+  // Solo l'elenco delle chiavi (per il pannello docente). Firebase non ha una lettura "solo chiavi" con filtro
+  // per prefisso, quindi si appoggia a getPrefix; la data di ultima modifica non è disponibile (agg: null).
+  async chiavi(prefix) {
+    const mappa = await this.getPrefix(prefix);
+    return Object.keys(mappa).map(key => ({ key, agg: null }));
   }
 };
 
@@ -286,6 +334,28 @@ const remoteStorageSupabase = {
     const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/incrementa_contatore', { method: 'POST', headers: _sbHeaders(), body: JSON.stringify({ chiave: key }) });
     await _sbVerifica(res, 'contatore', key);
     return await res.json();
+  },
+  // Solo chiavi + data di ultima modifica, SENZA i valori (pannello docente: statistiche dei corsi senza
+  // scaricare megabyte di movimenti). Ritorna [{ key, agg }] con agg = timestamp ISO o null.
+  async chiavi(prefix) {
+    const elenco = []; const PAGINA = 1000;
+    for (let da = 0; ; da += PAGINA) {
+      const res = await fetch(SUPABASE_URL + '/rest/v1/storage?select=key,updated_at&key=like.' + encodeURIComponent(prefix.replace(/\*/g, '') + '*') + '&order=key',
+        { headers: _sbHeaders({ Range: da + '-' + (da + PAGINA - 1), 'Range-Unit': 'items' }), cache: 'no-store' });
+      await _sbVerifica(res, 'lettura elenco chiavi', prefix);
+      const righe = await res.json();
+      righe.forEach(r => { if (r.key.indexOf(prefix) === 0) elenco.push({ key: r.key, agg: r.updated_at || null }); });
+      if (righe.length < PAGINA) break;
+    }
+    return elenco;
+  },
+  // Scrittura in blocco (ripristino backup): un'unica richiesta per un gruppo di chiavi. coppie = [[key, valoreStringa], ...]
+  async setMolti(coppie) {
+    const ora = new Date().toISOString();
+    const res = await fetch(SUPABASE_URL + '/rest/v1/storage?on_conflict=key', { method: 'POST',
+      headers: _sbHeaders({ Prefer: 'resolution=merge-duplicates,return=minimal' }),
+      body: JSON.stringify(coppie.map(([key, value]) => ({ key, value, updated_at: ora }))) });
+    await _sbVerifica(res, 'scrittura in blocco', coppie.length + ' chiavi');
   }
 };
 const remoteStorage = USA_SUPABASE ? remoteStorageSupabase : remoteStorageFirebase;
@@ -429,6 +499,51 @@ async function elencoDispositiviBannati() {
 async function sbloccaDispositivo(id) {
   if (!STORAGE_CONFIGURATO) return;
   try { await remoteStorage.delete('dispositiviBannati::' + id); } catch (e) {}
+}
+async function bannaDispositivo(id, motivo) {
+  if (!STORAGE_CONFIGURATO || !id) return;
+  await remoteStorage.set('dispositiviBannati::' + id, JSON.stringify({ motivo: motivo || 'bloccato dal formatore', quando: nowStr() }));
+}
+async function revocaDispositivoFidato(id) {
+  if (!STORAGE_CONFIGURATO) return;
+  await remoteStorage.delete('dispositiviFidati::' + id);
+}
+
+// ---- PRESENZA DISPOSITIVI: ogni dispositivo collegato a un corso scrive ogni tanto un piccolo record
+// "dispositiviAttivi::<id>" (corso, nome, ora, browser). Serve al pannello docente per vedere chi è collegato
+// e da dove, e per bloccare un singolo dispositivo. Una sola chiave per dispositivo, sempre sovrascritta:
+// il volume resta minimo anche con un'aula piena. Lo stesso giro controlla se il formatore ha bloccato il
+// dispositivo, così il blocco ha effetto entro pochi minuti senza aspettare che il corsista ricarichi la pagina.
+const PRESENZA_OGNI_MS = 3 * 60 * 1000;
+let _ultimaPresenza = 0;
+let _timerPresenza = null;
+let _inPannelloDocente = false;
+function _descriviBrowser() {
+  const ua = navigator.userAgent || '';
+  const os = /Android/i.test(ua) ? 'Android' : /iPhone|iPad|iPod/i.test(ua) ? 'iOS' : /Windows/i.test(ua) ? 'Windows'
+    : /Mac OS X|Macintosh/i.test(ua) ? 'macOS' : /CrOS/i.test(ua) ? 'ChromeOS' : /Linux/i.test(ua) ? 'Linux' : 'altro';
+  const br = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /SamsungBrowser/.test(ua) ? 'Samsung' : /Firefox\//.test(ua) ? 'Firefox'
+    : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'browser';
+  return br + ' / ' + os;
+}
+async function registraPresenzaDispositivo(forza) {
+  if (!STORAGE_CONFIGURATO || !currentCorso || !currentUser) return;
+  if (!forza && Date.now() - _ultimaPresenza < PRESENZA_OGNI_MS) return;
+  _ultimaPresenza = Date.now();
+  try {
+    await remoteStorage.set('dispositiviAttivi::' + getDeviceId(), JSON.stringify({
+      corso: currentCorso, utente: currentUser, ultimoAccesso: nowStr(), ts: Date.now(), browser: _descriviBrowser() }));
+  } catch (e) { /* non grave: la presenza è solo informativa */ }
+}
+function avviaPresenzaDispositivo() {
+  registraPresenzaDispositivo(true);
+  if (_timerPresenza) return;
+  _timerPresenza = setInterval(async () => {
+    if (document.visibilityState !== 'visible' || !currentUser || _inPannelloDocente) return;
+    const ban = await dispositivoBannato();
+    if (ban) { clearInterval(_timerPresenza); _timerPresenza = null; renderDispositivoBannato(ban); return; }
+    registraPresenzaDispositivo(true);
+  }, PRESENZA_OGNI_MS);
 }
 // ---- DISPOSITIVI FIDATI: un dispositivo diventa "fidato" automaticamente la prima volta
 // che inserisce correttamente ENTRAMBI i PIN. Da quel momento, un PIN sbagliato su quel
@@ -978,7 +1093,7 @@ async function renderCorsoSelect() {
         </div>
         <p>Seleziona il tuo corso dall'elenco (te lo comunica il formatore).</p>
         ${corsiRegistrati.length === 0 ? `
-          <p style="font-size:11.5px; color:#a83232;">Nessun corso è stato ancora creato. Chiedi al formatore di crearne uno dall'area Amministrazione.</p>
+          <p style="font-size:11.5px; color:#a83232;">Nessun corso è stato ancora creato. Chiedi al formatore di crearne uno dal Pannello docente.</p>
         ` : `
           <select id="corso-code" style="width:100%; padding:8px; font-size:12px; border:1px solid #7f9db9; margin-bottom:12px; font-family:inherit;">
             <option value="">-- seleziona corso --</option>
@@ -992,7 +1107,7 @@ async function renderCorsoSelect() {
           <input type="text" id="corso-manuale-input" placeholder="es. PRATO-LOG" autocomplete="off" style="text-transform:uppercase;">
           <button id="corso-manuale-btn">Continua con questo codice</button>
         </div>
-        <div style="text-align:center; margin-top:14px;"><span id="link-admin" style="font-size:10.5px; color:#8a8a80; text-decoration:underline; cursor:pointer;">🔧 Amministrazione (solo formatori)</span></div>
+        <div style="text-align:center; margin-top:14px;"><span id="link-admin" style="font-size:10.5px; color:#8a8a80; text-decoration:underline; cursor:pointer;">🎓 Pannello docente (solo formatori)</span></div>
       </div>
     </div>
   `;
@@ -1033,7 +1148,7 @@ function _renderAdminPinInterno() {
   app.innerHTML = `
     <div class="login-overlay">
       <div class="login-box">
-        <h2 style="margin:0 0 4px 0;">🔧 Amministrazione</h2>
+        <h2 style="margin:0 0 4px 0;">🎓 Pannello docente</h2>
         <p>Inserisci il ${_adminPinFase === 1 ? 'primo' : 'secondo'} PIN (${_adminPinFase}/2).</p>
         <input type="password" id="admin-pin" placeholder="PIN" autocomplete="off">
         <button id="admin-pin-btn">Entra</button>
@@ -1066,41 +1181,6 @@ function _renderAdminPinInterno() {
   input.focus();
 }
 
-let adminMsg = '';
-let adminConfirmDelete = false;
-let adminCorsoValue = '';
-
-async function scaricaBackupCorso(corso) {
-  // Prende TUTTE le chiavi del corso in un colpo solo (cassetti e patch di ogni partecipante
-  // inclusi), non solo l'eventuale vecchia chiave semplice — quella coi dati veri.
-  const mappa = await remoteStorage.getPrefix('corso_' + corso + '::');
-  const dati = {};
-  for (const chiaveCompleta in mappa) {
-    try { dati[chiaveCompleta] = JSON.parse(mappa[chiaveCompleta]); }
-    catch (e) { dati[chiaveCompleta] = mappa[chiaveCompleta]; }
-  }
-  const contenuto = JSON.stringify({ corso, esportatoIl: nowStr(), dati }, null, 2);
-  const blob = new Blob([contenuto], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'backup_' + corso + '_' + isoDate(new Date()) + '.json';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-}
-
-async function eliminaCorso(corso) {
-  // Stesso discorso: elimina davvero tutti i cassetti/patch del corso, non solo una chiave
-  // semplice che con l'architettura attuale non contiene più i dati veri.
-  const mappa = await remoteStorage.getPrefix('corso_' + corso + '::');
-  for (const chiaveCompleta in mappa) {
-    try { await remoteStorage.delete(chiaveCompleta); } catch (e) { /* proseguo comunque con le altre */ }
-  }
-  await rimuoviCorsoRegistrato(corso);
-}
-
 async function registraCorso(corso) {
   if (!STORAGE_CONFIGURATO) return false;
   const chiave = 'corsiRegistrati::' + corso; // ogni corso ha una chiave tutta sua: zero rischio
@@ -1121,7 +1201,6 @@ async function caricaElencoCorsi() {
   return Object.values(mappa).map(v => JSON.parse(v));
 }
 
-let adminNuovoCorsoValue = '';
 
 // ============ PULIZIA MASSIVA DATI VECCHI (RA aperte / OA non ricevuti / OP non confermati, prima di oggi) ============
 // Lavora sui dati grezzi per-partecipante (non tramite il sistema di patch): ogni record candidato
@@ -1227,213 +1306,679 @@ async function giacenzaNegativaConsentita() {
   return !!(await leggiImpostazioniCorso(currentCorso)).giacenzaNegativa;
 }
 
-async function renderAdminPanel() {
-  const app = document.getElementById('app');
-  app.innerHTML = `<div class="login-overlay"><div class="login-box"><p style="text-align:center; color:#8a8a80;">Caricamento…</p></div></div>`;
-  const corsiRegistrati = await loadList('corsiRegistrati', true);
-  const logPersistente = await _diagLeggiPersistente();
-  const logPersistenteRecenti = logPersistente.slice(-15).reverse();
-  const dispositiviBannati = await elencoDispositiviBannati();
-  const impostazioniCorsi = {};
-  for (const c of corsiRegistrati) impostazioniCorsi[c.codice] = await leggiImpostazioniCorso(c.codice);
-
-  app.innerHTML = `
-    <div class="login-overlay">
-      <div class="login-box" style="width:460px;">
-        <h2 style="margin:0 0 4px 0;">🔧 Amministrazione corsi</h2>
-
-        <div style="border:1px solid #d4d0c0; padding:10px; margin:10px 0; text-align:left;">
-          <strong style="font-size:12px;">Crea nuovo corso</strong>
-          <p style="font-size:10.5px; color:#8a8a80; margin:4px 0 8px 0;">Solo i corsi creati qui compariranno nell'elenco che i corsisti possono selezionare.</p>
-          <input type="text" id="admin-nuovo-corso" value="${adminNuovoCorsoValue}" placeholder="es. CORSO-SETT-2026" autocomplete="off" style="text-transform:uppercase; margin-bottom:8px;">
-          <button id="admin-crea-btn" style="background:#1a6b2e; width:100%;">+ Crea corso</button>
-        </div>
-
-        <div style="text-align:left; margin:14px 0 6px 0;"><strong style="font-size:12px;">Corsi esistenti</strong></div>
-        <div style="max-height:180px; overflow-y:auto; border:1px solid #d4d0c0;">
-          ${corsiRegistrati.length===0 ? '<p style="font-size:11px; color:#9a9a8f; padding:10px; margin:0;">Nessun corso ancora creato.</p>' :
-            corsiRegistrati.map(c => `
-              <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; border-bottom:1px solid #eee; font-size:11px;">
-                <span>${c.codice}</span>
-                <span>
-                  <span class="print-btn admin-giac-neg" data-corso="${c.codice}" style="margin-right:10px; color:${impostazioniCorsi[c.codice].giacenzaNegativa ? '#a83232' : '#1a6b2e'};" title="Interruttore generale (livello stabilimento): vale solo per i materiali con flag 'Giacenza negativa ammessa' in MM02">giac. negativa: ${impostazioniCorsi[c.codice].giacenzaNegativa ? 'CONSENTITA' : 'bloccata'}</span>
-                  <span class="print-btn admin-sel-corso" data-corso="${c.codice}" data-azione="backup" style="margin-right:10px;">📥 backup</span>
-                  <span class="print-btn admin-sel-corso" data-corso="${c.codice}" data-azione="elimina" style="color:#a83232;">🗑 elimina</span>
-                </span>
-              </div>
-            `).join('')}
-        </div>
-
-        ${adminConfirmDelete ? `
-          <div style="border:1px solid #a83232; padding:10px; margin-top:10px; text-align:left;">
-            <p style="font-size:11px; color:#a83232; margin:0 0 6px 0;">Eliminare definitivamente <strong>${adminCorsoValue}</strong>? Digita di nuovo il codice per confermare — verrà rimosso anche dall'elenco selezionabile.</p>
-            <input type="text" id="admin-corso-confirm" placeholder="Ridigita il codice corso" autocomplete="off" style="text-transform:uppercase; border-color:#a83232; margin-bottom:8px;">
-            <button id="admin-delete-confirm-btn" style="background:#a83232;">Conferma eliminazione definitiva</button>
-            <button id="admin-delete-cancel-btn" style="background:#8a8a80;">Annulla</button>
-          </div>
-        ` : ''}
-
-        <div style="border:1px solid #d4d0c0; padding:10px; margin:14px 0 0 0; text-align:left;">
-          <strong style="font-size:12px;">🧹 Pulizia massiva dati non elaborati (prima di oggi)</strong>
-          <p style="font-size:10.5px; color:#8a8a80; margin:4px 0 8px 0;">Elimina in blocco, per il corso scelto: richieste d'acquisto ancora aperte, ordini d'acquisto senza nessuna riga ricevuta, ordini di produzione non confermati e ordini di vendita senza nessuna riga consegnata — tutti creati prima di oggi. Lavora sui dati grezzi (non sul sistema di patch), quindi funziona anche sui casi con numero documento duplicato che a volte impediscono l'eliminazione singola dalla schermata normale.</p>
-          <select id="admin-pulizia-corso" style="width:100%; margin-bottom:8px;">
-            <option value="">-- seleziona corso --</option>
-            ${corsiRegistrati.map(c => `<option value="${c.codice}" ${adminPulizia.corso===c.codice?'selected':''}>${c.codice}</option>`).join('')}
-          </select>
-          <button id="admin-pulizia-analizza-btn" ${!adminPulizia.corso ? 'disabled' : ''} style="background:#3a5a8c; width:100%;">🔍 Analizza</button>
-          ${adminPulizia.analisi ? (() => {
-            const a = adminPulizia.analisi;
-            const ov = a.ov || [];
-            const totale = a.ra.length + a.oa.length + a.op.length + ov.length;
-            if (totale === 0) return `<p style="font-size:11px; color:#1a6b2e; margin-top:8px;">Nessun elemento da eliminare per ${adminPulizia.corso}: non ci sono RA aperte, OA non ricevuti, OP non confermati o OV non consegnati creati prima di oggi.</p>`;
-            return `
-              <div style="margin-top:8px; font-size:11px;">
-                <p style="margin:0 0 4px 0;">Trovati <strong>${totale}</strong> elementi da eliminare in <strong>${adminPulizia.corso}</strong>:</p>
-                <ul style="margin:0 0 8px 18px; padding:0;">
-                  <li>${a.ra.length} richiesta/e d'acquisto aperta/e: ${a.ra.slice(0,8).map(x=>x.rec.numero).join(', ')}${a.ra.length>8?'…':''}</li>
-                  <li>${a.oa.length} ordine/i d'acquisto senza ricezioni: ${a.oa.slice(0,8).map(x=>x.rec.numero).join(', ')}${a.oa.length>8?'…':''}</li>
-                  <li>${a.op.length} ordine/i di produzione non confermato/i: ${a.op.slice(0,8).map(x=>x.rec.numero).join(', ')}${a.op.length>8?'…':''}</li>
-                  <li>${ov.length} ordine/i di vendita senza consegne: ${ov.slice(0,8).map(x=>x.rec.numero).join(', ')}${ov.length>8?'…':''}</li>
-                </ul>
-                <p style="font-size:10.5px; color:#a86a1a; margin:0 0 8px 0;">Consigliato: scarica prima un backup del corso (pulsante 📥 backup qui sopra).</p>
-                <input type="text" id="admin-pulizia-confirm" placeholder="Scrivi ELIMINA per confermare" autocomplete="off" style="text-transform:uppercase; border-color:#a83232; margin-bottom:8px;">
-                <button id="admin-pulizia-esegui-btn" style="background:#a83232; width:100%;" ${adminPulizia.inCorso?'disabled':''}>${adminPulizia.inCorso ? 'Eliminazione in corso…' : `🗑 Elimina questi ${totale} elementi`}</button>
-              </div>`;
-          })() : ''}
-        </div>
-
-        ${adminMsg ? `<p style="font-size:11px; color:${adminMsg.startsWith('Errore')?'#a83232':'#1a6b2e'}; margin-top:10px;">${adminMsg}</p>` : ''}
-
-        <div style="border:1px solid #d4d0c0; padding:10px; margin:14px 0 0 0; text-align:left;">
-          <strong style="font-size:12px;">⛔ Dispositivi bannati (${dispositiviBannati.length})</strong>
-          ${dispositiviBannati.length === 0 ? '<p style="font-size:10.5px; color:#8a8a80; margin:6px 0 0 0;">Nessun dispositivo bannato al momento.</p>' :
-            dispositiviBannati.map(d => `
-              <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid #eee;">
-                <span style="font-size:10.5px;">${d.motivo || 'motivo non specificato'} — ${d.quando || ''} <span style="color:#8a8a80;">(${d.id.slice(0,18)}…)</span></span>
-                <span class="print-btn sblocca-dispositivo-btn" data-id="${d.id}" style="cursor:pointer; color:#1a6b2e; text-decoration:underline; font-size:10.5px;">sblocca</span>
-              </div>
-            `).join('')}
-        </div>
-
-        <div style="border:1px solid #d4d0c0; padding:10px; margin:14px 0 0 0; text-align:left;">
-          <strong style="font-size:12px;">🩺 Diagnostica storage (questa sessione/dispositivo)</strong>
-          <p style="font-size:10.5px; margin:6px 0 0 0;">Backend condiviso configurato: <strong style="color:${STORAGE_CONFIGURATO ? '#1a6b2e' : '#a83232'};">${STORAGE_CONFIGURATO ? 'sì' : 'NO — incolla l\'URL Apps Script nel codice'}</strong></p>
-          <p style="font-size:10.5px; margin:4px 0 0 0;">Scritture riuscite: <strong>${_diagScrittureOk}</strong> &nbsp;|&nbsp; Scritture fallite: <strong style="color:${_diagScrittureFallite ? '#a83232':'inherit'};">${_diagScrittureFallite}</strong></p>
-          <p style="font-size:10.5px; margin:4px 0 0 0;">Letture tentate: <strong>${_diagLetture}</strong> &nbsp;|&nbsp; Letture non andate a buon fine: <strong>${_diagLettureFallite}</strong> <span style="color:#8a8a80;">(normale se sono chiavi non ancora create)</span></p>
-          ${_diagUltimoErrore ? `<p style="font-size:10.5px; margin:6px 0 0 0; color:#a83232;">Ultimo errore (${_diagUltimoErrore.tipo}, ${new Date(_diagUltimoErrore.ts).toLocaleTimeString()}): chiave "${_diagUltimoErrore.key}" — ${_diagUltimoErrore.msg}</p>` : `<p style="font-size:10.5px; margin:6px 0 0 0; color:#8a8a80;">Nessun errore registrato in questa sessione.</p>`}
-          <p style="font-size:10.5px; margin-top:6px;"><span id="admin-diag-copia" class="print-btn" style="cursor:pointer;">📋 Copia log errori (ultimi ${_diagLogErrori.length})</span></p>
-          <p style="font-size:9.5px; color:#8a8a80; margin-top:6px;">Se le "scritture fallite" crescono durante un corso attivo con molti collegati, è probabile un limite di frequenza sulle richieste di storage: incollami questo log per approfondire.</p>
-          <div style="margin-top:10px; border-top:1px dashed #c8c2a8; padding-top:8px;">
-            <strong style="font-size:11px;">Log errori salvato su QUESTO dispositivo (sopravvive ai refresh)</strong>
-            ${logPersistenteRecenti.length === 0 ? '<p style="font-size:10.5px; color:#8a8a80; margin:4px 0 0 0;">Nessun errore mai registrato su questo dispositivo.</p>' :
-              `<div style="max-height:140px; overflow-y:auto; margin-top:4px;">
-                ${logPersistenteRecenti.map(v => `<p style="font-size:9.5px; margin:2px 0; color:#a83232;">[${new Date(v.ts).toLocaleString()}] ${v.tipo} chiave="${v.key}" — ${v.msg}</p>`).join('')}
-              </div>`}
-            <p style="font-size:10.5px; margin-top:6px;"><span id="admin-diag-copia-persistente" class="print-btn" style="cursor:pointer;">📋 Copia log dispositivo (ultimi ${logPersistenteRecenti.length})</span></p>
-          </div>
-        </div>
-
-        <div class="login-note"><span id="admin-back2" style="text-decoration:underline; cursor:pointer;">← torna al login</span></div>
-      </div>
-    </div>
-  `;
-  document.getElementById('admin-back2').addEventListener('click', () => { adminMsg=''; adminConfirmDelete=false; adminCorsoValue=''; adminNuovoCorsoValue=''; renderCorsoSelect(); });
-  document.querySelectorAll('.admin-giac-neg').forEach(el => {
-    el.addEventListener('click', async () => {
-      const cod = el.dataset.corso;
-      const imp = { ...(impostazioniCorsi[cod] || {}) };
-      imp.giacenzaNegativa = !imp.giacenzaNegativa;
-      await setRaw('corso_' + cod + '::impostazioni', imp);
-      adminMsg = `Corso ${cod}: giacenza negativa ${imp.giacenzaNegativa ? 'CONSENTITA' : 'bloccata'}.`;
-      renderAdminPanel();
+// ============ PANNELLO DOCENTE ============
+// Area del formatore (dopo i due PIN): schede Corsi, Dispositivi, Backup e ripristino, Pulizia dati, Diagnostica.
+// Lavora direttamente sulle chiavi del database (stessa tabella/nodo "storage" usato dal programma), quindi vale
+// sia con Supabase sia con Firebase. Le statistiche usano remoteStorage.chiavi(): solo i nomi delle chiavi, senza
+// scaricare i dati dei corsi.
+const doc = {
+  tab: 'corsi',
+  msg: '', msgErr: false,
+  nuovoCorso: '',
+  azioneCorso: null,        // { tipo: 'elimina' | 'duplica', corso }
+  partecipantiAperti: {},   // { CORSO: [ {nome, shard, primoAccesso} ] } elenco caricato su richiesta
+  filtroDispositivi: '',    // codice corso, '' = tutti
+  bannaId: null,            // dispositivo per cui è aperto il modulo "blocca"
+  ripristino: null,         // { nomeFile, backup, destinazione, svuota }
+  rimozione: { corso: '', partecipanti: null, shard: '', chiavi: null },
+  svuota: { corso: '' },
+  progresso: '',            // testo di avanzamento delle operazioni lunghe
+  occupato: false,
+};
+function _h(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function _normCodiceCorso(v) { return String(v || '').trim().toUpperCase().replace(/[^A-Z0-9\-_]/g, '-'); }
+function _docMsg(testo, errore) { doc.msg = testo; doc.msgErr = !!errore; }
+function _fmtTempo(ts) {
+  if (!ts) return '—';
+  const diff = Date.now() - ts;
+  if (diff < 60000) return 'adesso';
+  if (diff < 3600000) return Math.round(diff / 60000) + ' min fa';
+  if (diff < 86400000) return Math.round(diff / 3600000) + ' h fa';
+  const d = new Date(ts);
+  return d.toLocaleDateString('it-IT') + ' ' + d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+}
+// Esegue fn su tutti gli elementi con al massimo "n" richieste contemporanee (evita di saturare il backend).
+async function _inParallelo(elementi, n, fn) {
+  let i = 0;
+  const lavoratori = Array.from({ length: Math.min(n, elementi.length) }, async () => {
+    while (i < elementi.length) { const idx = i++; await fn(elementi[idx], idx); }
+  });
+  await Promise.all(lavoratori);
+}
+async function _eliminaChiavi(chiavi, etichetta) {
+  let fatte = 0, errori = 0;
+  await _inParallelo(chiavi, 6, async (k) => {
+    try { await remoteStorage.delete(k); } catch (e) { errori++; _diagRegistraErrore('eliminazione', k, e); }
+    fatte++;
+    if (fatte % 10 === 0 || fatte === chiavi.length) _docProgresso(`${etichetta}: ${fatte}/${chiavi.length}`);
+  });
+  return errori;
+}
+async function _scriviChiavi(coppie, etichetta) {
+  let fatte = 0, errori = 0;
+  if (remoteStorage.setMolti) {
+    // Gruppi da ~1 MB al massimo per richiesta.
+    const gruppi = []; let corrente = [], peso = 0;
+    coppie.forEach(c => {
+      if (corrente.length && (peso + c[1].length > 1000000 || corrente.length >= 200)) { gruppi.push(corrente); corrente = []; peso = 0; }
+      corrente.push(c); peso += c[1].length;
     });
-  });
-  document.querySelectorAll('.sblocca-dispositivo-btn').forEach(el => {
-    el.addEventListener('click', async () => {
-      await sbloccaDispositivo(el.dataset.id);
-      adminMsg = 'Dispositivo sbloccato.';
-      renderAdminPanel();
-    });
-  });
-  const diagCopiaBtn = document.getElementById('admin-diag-copia');
-  if (diagCopiaBtn) diagCopiaBtn.addEventListener('click', async () => {
-    const testo = _diagLogErrori.map(v => `[${new Date(v.ts).toLocaleString()}] ${v.tipo} chiave="${v.key}" — ${v.msg}`).join('\n') || '(nessun errore registrato)';
-    try { await navigator.clipboard.writeText(testo); adminMsg = 'Log copiato negli appunti.'; }
-    catch (e) { adminMsg = 'Copia negli appunti non riuscita: ' + testo; }
-    renderAdminPanel();
-  });
-  const diagCopiaPersistBtn = document.getElementById('admin-diag-copia-persistente');
-  if (diagCopiaPersistBtn) diagCopiaPersistBtn.addEventListener('click', async () => {
-    const testo = logPersistenteRecenti.map(v => `[${new Date(v.ts).toLocaleString()}] ${v.tipo} chiave="${v.key}" — ${v.msg}`).join('\n') || '(nessun errore registrato su questo dispositivo)';
-    try { await navigator.clipboard.writeText(testo); adminMsg = 'Log dispositivo copiato negli appunti.'; }
-    catch (e) { adminMsg = 'Copia negli appunti non riuscita: ' + testo; }
-    renderAdminPanel();
-  });
-  document.getElementById('admin-nuovo-corso').addEventListener('input', (e) => { adminNuovoCorsoValue = e.target.value; });
-  document.getElementById('admin-crea-btn').addEventListener('click', async () => {
-    const corso = adminNuovoCorsoValue.trim().toUpperCase().replace(/[^A-Z0-9\-_]/g, '-');
-    if (!corso) { adminMsg = 'Errore: inserisci un codice corso.'; renderAdminPanel(); return; }
-    const creato = await registraCorso(corso);
-    adminMsg = creato ? `Corso ${corso} creato. Ora i corsisti possono selezionarlo.` : `Errore: il corso ${corso} esiste già.`;
-    adminNuovoCorsoValue = '';
-    renderAdminPanel();
-  });
-  document.querySelectorAll('.admin-sel-corso').forEach(el => {
-    el.addEventListener('click', async () => {
-      const corso = el.dataset.corso;
-      if (el.dataset.azione === 'backup') {
-        await scaricaBackupCorso(corso);
-        adminMsg = `Backup di ${corso} scaricato.`;
-        renderAdminPanel();
-      } else {
-        adminCorsoValue = corso;
-        adminConfirmDelete = true;
-        renderAdminPanel();
+    if (corrente.length) gruppi.push(corrente);
+    for (const g of gruppi) {
+      try { await remoteStorage.setMolti(g); }
+      catch (e) {
+        // ripiego chiave per chiave, così un singolo valore problematico non blocca tutto il gruppo
+        for (const [k, v] of g) { try { await remoteStorage.set(k, v); } catch (e2) { errori++; _diagRegistraErrore('scrittura', k, e2); } }
       }
+      fatte += g.length;
+      _docProgresso(`${etichetta}: ${fatte}/${coppie.length}`);
+    }
+    return errori;
+  }
+  await _inParallelo(coppie, 6, async ([k, v]) => {
+    try { await remoteStorage.set(k, v); } catch (e) { errori++; _diagRegistraErrore('scrittura', k, e); }
+    fatte++;
+    if (fatte % 10 === 0 || fatte === coppie.length) _docProgresso(`${etichetta}: ${fatte}/${coppie.length}`);
+  });
+  return errori;
+}
+function _docProgresso(testo) {
+  doc.progresso = testo;
+  const el = document.getElementById('doc-progresso');
+  if (el) el.textContent = testo;
+}
+function _scaricaFileJson(nomeFile, oggetto) {
+  const blob = new Blob([JSON.stringify(oggetto, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url; link.download = nomeFile;
+  document.body.appendChild(link); link.click(); document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ---- Formato dei backup ----
+// "dati" contiene i valori già decodificati (leggibili aprendo il file); le chiavi il cui valore non è JSON
+// (es. flag salvati come testo semplice) o è una stringa JSON finiscono in "chiaviGrezze" e vengono ripristinate
+// tali e quali. I backup del vecchio formato (senza "chiaviGrezze") restano ripristinabili.
+function _mappaInBackup(mappa) {
+  const dati = {}, chiaviGrezze = [];
+  for (const k in mappa) {
+    let v;
+    try { v = JSON.parse(mappa[k]); } catch (e) { v = undefined; }
+    if (v === undefined || typeof v === 'string') { dati[k] = mappa[k]; chiaviGrezze.push(k); }
+    else dati[k] = v;
+  }
+  return { dati, chiaviGrezze };
+}
+function _backupInCoppie(backup) {
+  const grezze = new Set(backup.chiaviGrezze || []);
+  const vecchioFormato = !Array.isArray(backup.chiaviGrezze);
+  return Object.keys(backup.dati || {}).map(k => {
+    const v = backup.dati[k];
+    if (grezze.has(k) || (vecchioFormato && typeof v === 'string')) return [k, String(v)];
+    return [k, JSON.stringify(v)];
+  });
+}
+async function scaricaBackupCorso(corso) {
+  // Prende TUTTE le chiavi del corso in un colpo solo (cassetti e patch di ogni partecipante inclusi).
+  const mappa = await remoteStorage.getPrefix('corso_' + corso + '::');
+  const { dati, chiaviGrezze } = _mappaInBackup(mappa);
+  _scaricaFileJson('backup_' + corso + '_' + isoDate(new Date()) + '.json',
+    { tipo: 'corso', formato: 2, corso, esportatoIl: nowStr(), numeroChiavi: Object.keys(dati).length, dati, chiaviGrezze });
+  return Object.keys(dati).length;
+}
+async function scaricaBackupCompleto() {
+  const mappa = await remoteStorage.getPrefix('');
+  const { dati, chiaviGrezze } = _mappaInBackup(mappa);
+  _scaricaFileJson('backup_COMPLETO_' + isoDate(new Date()) + '.json',
+    { tipo: 'completo', formato: 2, esportatoIl: nowStr(), numeroChiavi: Object.keys(dati).length, dati, chiaviGrezze });
+  return Object.keys(dati).length;
+}
+async function eliminaCorso(corso) {
+  const chiavi = (await remoteStorage.chiavi('corso_' + corso + '::')).map(x => x.key);
+  await _eliminaChiavi(chiavi, 'Eliminazione ' + corso);
+  await rimuoviCorsoRegistrato(corso);
+}
+async function duplicaCorso(origine, destinazione) {
+  const mappa = await remoteStorage.getPrefix('corso_' + origine + '::');
+  const pre = 'corso_' + origine + '::', nuovo = 'corso_' + destinazione + '::';
+  const coppie = Object.keys(mappa).map(k => [nuovo + k.slice(pre.length), mappa[k]]);
+  const errori = await _scriviChiavi(coppie, 'Copia ' + origine + ' → ' + destinazione);
+  await registraCorso(destinazione);
+  return { chiavi: coppie.length, errori };
+}
+
+// ---- Caricamento dati per le schede ----
+async function _datiSchedaCorsi() {
+  const corsiRegistrati = await caricaElencoCorsi();
+  const chiavi = await remoteStorage.chiavi('corso_');
+  const presenze = await _leggiPresenze();
+  const stat = {};
+  const s = (c) => (stat[c] = stat[c] || { chiavi: 0, partecipanti: 0, agg: null, attivi: 0, attivi24: 0 });
+  chiavi.forEach(({ key, agg }) => {
+    const m = /^corso_([^:]+)::/.exec(key); if (!m) return;
+    const st = s(m[1]); st.chiavi++;
+    if (key.indexOf('::partecipanti::') > 0) st.partecipanti++;
+    if (agg && (!st.agg || agg > st.agg)) st.agg = agg;
+  });
+  presenze.forEach(p => {
+    if (!p.corso) return;
+    const st = s(p.corso);
+    if (Date.now() - p.ts < 15 * 60000) st.attivi++;
+    if (Date.now() - p.ts < 86400000) st.attivi24++;
+  });
+  const impostazioni = {};
+  await _inParallelo(corsiRegistrati, 4, async c => { impostazioni[c.codice] = await leggiImpostazioniCorso(c.codice); });
+  const registrati = new Set(corsiRegistrati.map(c => c.codice));
+  // Corsi con dati ma non presenti nell'elenco (es. codice inserito a mano dai corsisti)
+  const nonRegistrati = Object.keys(stat).filter(c => !registrati.has(c) && stat[c].chiavi > 0);
+  return { corsiRegistrati, stat, impostazioni, nonRegistrati };
+}
+async function _leggiPresenze() {
+  const mappa = await remoteStorage.getPrefix('dispositiviAttivi::');
+  return Object.keys(mappa).map(k => {
+    let v = {}; try { v = JSON.parse(mappa[k]) || {}; } catch (e) {}
+    return { id: k.slice('dispositiviAttivi::'.length), ...v, ts: Number(v.ts) || 0 };
+  }).sort((a, b) => b.ts - a.ts);
+}
+async function _datiSchedaDispositivi() {
+  const [presenze, bannati, fidatiMappa, corsi] = await Promise.all([
+    _leggiPresenze(), elencoDispositiviBannati(), remoteStorage.getPrefix('dispositiviFidati::'), caricaElencoCorsi()]);
+  const fidati = Object.keys(fidatiMappa).map(k => { let v = {}; try { v = JSON.parse(fidatiMappa[k]) || {}; } catch (e) {} return { id: k.slice('dispositiviFidati::'.length), ...v }; });
+  return { presenze, bannati, fidati, corsi };
+}
+
+// ---- Render ----
+async function renderAdminPanel() { return renderPannelloDocente(); }
+async function renderPannelloDocente() {
+  _inPannelloDocente = true;
+  const app = document.getElementById('app');
+  const schede = [['corsi', '📚 Corsi'], ['dispositivi', '💻 Dispositivi'], ['backup', '💾 Backup e ripristino'], ['pulizia', '🧹 Pulizia dati'], ['diagnostica', '🩺 Diagnostica']];
+  const intestazione = `
+    <div class="titlebar"><div class="titlebar-left"><div class="logo">S</div><span class="name">GRS Solutions ERP — Pannello docente</span></div>
+      <span id="doc-esci" style="cursor:pointer; text-decoration:underline; font-size:11px;">← esci dal pannello</span></div>
+    <div class="doc-tabs">${schede.map(([id, et]) => `<span class="doc-tab ${doc.tab === id ? 'attiva' : ''}" data-tab="${id}">${et}</span>`).join('')}
+      <span class="doc-tab" id="doc-ricarica" title="Ricarica i dati dal database" style="margin-left:auto;">🔄 aggiorna</span></div>`;
+  app.innerHTML = `<div class="doc-wrap">${intestazione}<div class="doc-body"><p style="color:#8a8a80;">Caricamento…</p></div></div>`;
+  let corpo = '';
+  try {
+    if (doc.tab === 'corsi') corpo = _htmlCorsi(await _datiSchedaCorsi());
+    else if (doc.tab === 'dispositivi') corpo = _htmlDispositivi(await _datiSchedaDispositivi());
+    else if (doc.tab === 'backup') corpo = _htmlBackup(await caricaElencoCorsi());
+    else if (doc.tab === 'pulizia') corpo = _htmlPulizia(await caricaElencoCorsi());
+    else corpo = await _htmlDiagnostica();
+  } catch (e) {
+    corpo = `<div class="doc-card"><p style="color:#a83232;">Impossibile leggere il database: ${_h(e && e.message || e)}</p></div>`;
+  }
+  const messaggio = doc.msg ? `<div class="doc-msg ${doc.msgErr ? 'err' : ''}">${_h(doc.msg)}</div>` : '';
+  const progresso = `<div id="doc-progresso" class="doc-progresso" style="${doc.occupato ? '' : 'display:none;'}">${_h(doc.progresso)}</div>`;
+  app.innerHTML = `<div class="doc-wrap">${intestazione}<div class="doc-body">${messaggio}${progresso}${corpo}</div></div>`;
+  _collegaPannelloDocente();
+}
+// Esegue un'operazione lunga mostrando l'avanzamento e impedendo doppi clic; al termine ridisegna il pannello.
+async function _docEsegui(fn) {
+  if (doc.occupato) return;
+  doc.occupato = true; doc.progresso = 'Operazione in corso…'; doc.msg = '';
+  document.querySelectorAll('.doc-body button').forEach(b => b.disabled = true);
+  const el = document.getElementById('doc-progresso'); if (el) { el.style.display = ''; el.textContent = doc.progresso; }
+  try { await fn(); }
+  catch (e) { _docMsg('Errore: ' + (e && e.message || e), true); }
+  doc.occupato = false; doc.progresso = '';
+  renderPannelloDocente();
+}
+
+function _htmlCorsi({ corsiRegistrati, stat, impostazioni, nonRegistrati }) {
+  const vuoto = { chiavi: 0, partecipanti: 0, agg: null, attivi: 0, attivi24: 0 };
+  const az = doc.azioneCorso;
+  const riga = (c) => {
+    const st = stat[c.codice] || vuoto;
+    const imp = impostazioni[c.codice] || {};
+    const part = doc.partecipantiAperti[c.codice];
+    return `
+      <tr>
+        <td><strong>${_h(c.codice)}</strong><div class="doc-sub">creato ${_h(c.creatoIl || '—')}</div></td>
+        <td class="num">${st.partecipanti}</td>
+        <td class="num">${st.attivi ? `<span class="doc-pill verde">${st.attivi} online</span>` : ''}${st.attivi24 ? `<div class="doc-sub">${st.attivi24} nelle 24h</div>` : (st.attivi ? '' : '<span class="doc-sub">—</span>')}</td>
+        <td>${st.agg ? _fmtTempo(Date.parse(st.agg)) : '—'}<div class="doc-sub">${st.chiavi} chiavi</div></td>
+        <td><span class="print-btn doc-giacneg" data-corso="${_h(c.codice)}" style="color:${imp.giacenzaNegativa ? '#a83232' : '#1a6b2e'};" title="Interruttore generale (livello stabilimento): vale solo per i materiali con flag 'Giacenza negativa ammessa' in MM02">${imp.giacenzaNegativa ? 'CONSENTITA' : 'bloccata'}</span></td>
+        <td class="doc-azioni">
+          <span class="print-btn doc-part" data-corso="${_h(c.codice)}">👥 ${part ? 'chiudi' : 'partecipanti'}</span>
+          <span class="print-btn doc-backup" data-corso="${_h(c.codice)}">📥 backup</span>
+          <span class="print-btn doc-duplica" data-corso="${_h(c.codice)}">⧉ duplica</span>
+          <span class="print-btn doc-elimina" data-corso="${_h(c.codice)}" style="color:#a83232;">🗑 elimina</span>
+        </td>
+      </tr>
+      ${part ? `<tr class="doc-dettaglio"><td colspan="6">${part.length === 0 ? '<span class="doc-sub">Nessun partecipante registrato.</span>' :
+        `<table class="doc-table interna"><tr><th>Nome</th><th>Cassetto</th><th>Primo accesso</th><th class="num">Chiavi dati</th></tr>
+          ${part.map(p => `<tr><td>${_h(p.nome)}</td><td class="doc-sub">${_h(p.shard)}</td><td>${_h(p.primoAccesso || '—')}</td><td class="num">${p.nChiavi}</td></tr>`).join('')}</table>`}</td></tr>` : ''}
+      ${az && az.corso === c.codice ? `<tr class="doc-dettaglio"><td colspan="6">${az.tipo === 'elimina' ? `
+        <div class="doc-conferma">
+          <p>Eliminare definitivamente <strong>${_h(c.codice)}</strong> con tutti i suoi dati (${st.chiavi} chiavi)? Il corso sparirà anche dall'elenco selezionabile. Consigliato: scarica prima il backup.</p>
+          <input type="text" id="doc-conferma-elimina" placeholder="Ridigita il codice corso" autocomplete="off" style="text-transform:uppercase;">
+          <button id="doc-elimina-ok" class="doc-btn rosso">Elimina definitivamente</button> <button id="doc-annulla" class="doc-btn grigio">Annulla</button>
+        </div>` : `
+        <div class="doc-conferma blu">
+          <p>Crea un nuovo corso partendo da una copia completa di <strong>${_h(c.codice)}</strong> (anagrafiche, documenti, movimenti, numerazioni). Utile per preparare un corso "modello" e ripartire da lì con una nuova classe.</p>
+          <input type="text" id="doc-duplica-dest" placeholder="Codice del nuovo corso" autocomplete="off" style="text-transform:uppercase;">
+          <button id="doc-duplica-ok" class="doc-btn">Duplica</button> <button id="doc-annulla" class="doc-btn grigio">Annulla</button>
+        </div>`}</td></tr>` : ''}`;
+  };
+  return `
+    <div class="doc-card">
+      <h3>Crea nuovo corso</h3>
+      <p class="doc-sub">Solo i corsi creati qui compaiono nell'elenco che i corsisti possono selezionare.</p>
+      <div class="doc-riga"><input type="text" id="doc-nuovo-corso" value="${_h(doc.nuovoCorso)}" placeholder="es. CORSO-SETT-2026" autocomplete="off" style="text-transform:uppercase;">
+      <button id="doc-crea" class="doc-btn verde">+ Crea corso</button></div>
+    </div>
+    <div class="doc-card">
+      <h3>Corsi (${corsiRegistrati.length})</h3>
+      ${corsiRegistrati.length === 0 ? '<p class="doc-sub">Nessun corso ancora creato.</p>' : `
+      <div class="doc-scroll"><table class="doc-table">
+        <tr><th>Corso</th><th class="num">Partecipanti</th><th class="num">Collegati</th><th>Ultima modifica</th><th>Giac. negativa</th><th>Azioni</th></tr>
+        ${corsiRegistrati.slice().sort((a, b) => a.codice.localeCompare(b.codice)).map(riga).join('')}
+      </table></div>`}
+      ${nonRegistrati.length ? `<div class="doc-avviso">Dati presenti nel database per corsi <strong>non in elenco</strong> (probabilmente codici inseriti a mano dai corsisti):
+        ${nonRegistrati.map(c => `<span style="white-space:nowrap;"><strong>${_h(c)}</strong> (${stat[c].chiavi} chiavi) <span class="print-btn doc-registra" data-corso="${_h(c)}">aggiungi all'elenco</span></span>`).join(' · ')}
+        <div class="doc-sub">Per eliminarli usa la scheda Pulizia dati → Svuota corso.</div></div>` : ''}
+    </div>`;
+}
+
+function _htmlDispositivi({ presenze, bannati, fidati, corsi }) {
+  const mio = getDeviceId();
+  const idBannati = new Set(bannati.map(b => b.id));
+  const idFidati = new Set(fidati.map(f => f.id));
+  const filtrate = doc.filtroDispositivi ? presenze.filter(p => p.corso === doc.filtroDispositivi) : presenze;
+  const stato = (ts) => { const d = Date.now() - ts; return d < 15 * 60000 ? '<span class="doc-pill verde">collegato</span>' : d < 86400000 ? '<span class="doc-pill giallo">oggi</span>' : '<span class="doc-pill grigio">inattivo</span>'; };
+  const tag = (id) => (id === mio ? ' <span class="doc-pill blu">questo</span>' : '') + (idFidati.has(id) ? ' <span class="doc-pill blu">formatore</span>' : '') + (idBannati.has(id) ? ' <span class="doc-pill rosso">bloccato</span>' : '');
+  return `
+    <div class="doc-card">
+      <h3>Dispositivi che hanno usato il programma (${presenze.length})</h3>
+      <p class="doc-sub">Ogni dispositivo collegato a un corso si segnala ogni 3 minuti. Bloccandolo, entro pochi minuti il programma su quel dispositivo si chiude con "Accesso non consentito" (il blocco è per dispositivo, non per rete: gli altri dell'aula non sono toccati).</p>
+      <div class="doc-riga"><select id="doc-filtro-disp"><option value="">Tutti i corsi</option>${corsi.map(c => `<option value="${_h(c.codice)}" ${doc.filtroDispositivi === c.codice ? 'selected' : ''}>${_h(c.codice)}</option>`).join('')}</select></div>
+      ${filtrate.length === 0 ? '<p class="doc-sub">Nessun dispositivo registrato (la presenza viene registrata da questa versione del programma in poi).</p>' : `
+      <div class="doc-scroll"><table class="doc-table">
+        <tr><th>Stato</th><th>Corso</th><th>Nome</th><th>Browser</th><th>Ultimo segnale</th><th>Dispositivo</th><th></th></tr>
+        ${filtrate.map(p => `<tr>
+          <td>${stato(p.ts)}</td><td>${_h(p.corso || '—')}</td><td><strong>${_h(p.utente || '—')}</strong></td><td>${_h(p.browser || '—')}</td>
+          <td>${_fmtTempo(p.ts)}</td><td class="doc-sub">${_h(p.id.slice(0, 22))}${tag(p.id)}</td>
+          <td>${p.id === mio || idBannati.has(p.id) ? '' : `<span class="print-btn doc-banna" data-id="${_h(p.id)}" style="color:#a83232;">⛔ blocca</span>`}</td></tr>
+          ${doc.bannaId === p.id ? `<tr class="doc-dettaglio"><td colspan="7"><div class="doc-conferma">
+            <p>Bloccare il dispositivo di <strong>${_h(p.utente || '—')}</strong> (${_h(p.browser || '')})?</p>
+            <input type="text" id="doc-banna-motivo" placeholder="Motivo (facoltativo, visibile solo a te)" autocomplete="off">
+            <button id="doc-banna-ok" class="doc-btn rosso">Blocca dispositivo</button> <button id="doc-annulla" class="doc-btn grigio">Annulla</button></div></td></tr>` : ''}`).join('')}
+      </table></div>`}
+    </div>
+    <div class="doc-card">
+      <h3>⛔ Dispositivi bloccati (${bannati.length})</h3>
+      ${bannati.length === 0 ? '<p class="doc-sub">Nessun dispositivo bloccato.</p>' : `<table class="doc-table">
+        <tr><th>Motivo</th><th>Quando</th><th>Ultimo utente noto</th><th>Dispositivo</th><th></th></tr>
+        ${bannati.map(b => { const p = presenze.find(x => x.id === b.id); return `<tr><td>${_h(b.motivo || 'motivo non specificato')}</td><td>${_h(b.quando || '')}</td>
+          <td>${p ? _h(p.utente + ' · ' + p.corso) : '<span class="doc-sub">—</span>'}</td><td class="doc-sub">${_h(b.id.slice(0, 22))}</td>
+          <td><span class="print-btn doc-sblocca" data-id="${_h(b.id)}" style="color:#1a6b2e;">sblocca</span></td></tr>`; }).join('')}</table>`}
+    </div>
+    <div class="doc-card">
+      <h3>🔑 Dispositivi del formatore (${fidati.length})</h3>
+      <p class="doc-sub">Dispositivi che hanno inserito correttamente entrambi i PIN: su questi un PIN sbagliato non blocca. Revoca quelli che non usi più (es. un PC d'aula su cui sei entrato una volta).</p>
+      ${fidati.length === 0 ? '<p class="doc-sub">Nessuno.</p>' : `<table class="doc-table">
+        <tr><th>Dispositivo</th><th>Fidato dal</th><th>Ultimo uso come corsista</th><th></th></tr>
+        ${fidati.map(f => { const p = presenze.find(x => x.id === f.id); return `<tr><td class="doc-sub">${_h(f.id)}${f.id === mio ? ' <span class="doc-pill blu">questo</span>' : ''}</td><td>${_h(f.dal || '—')}</td>
+          <td>${p ? _h(p.browser + ' · ' + p.utente + ' · ' + p.corso + ' · ') + _fmtTempo(p.ts) : '<span class="doc-sub">—</span>'}</td>
+          <td>${f.id === mio ? '' : `<span class="print-btn doc-revoca" data-id="${_h(f.id)}" style="color:#a83232;">revoca</span>`}</td></tr>`; }).join('')}</table>`}
+    </div>`;
+}
+
+function _htmlBackup(corsi) {
+  const r = doc.ripristino;
+  let blocco = '';
+  if (r) {
+    const b = r.backup;
+    const n = Object.keys(b.dati || {}).length;
+    blocco = b.tipo === 'completo' ? `
+      <div class="doc-conferma">
+        <p>File <strong>${_h(r.nomeFile)}</strong>: backup <strong>completo</strong> del ${_h(b.esportatoIl || '?')}, ${n} chiavi.</p>
+        <p>Le chiavi presenti nel file verranno riscritte con i valori del backup; quelle non presenti nel file non vengono toccate. Prima del ripristino verrà scaricato automaticamente un backup completo dello stato attuale.</p>
+        <input type="text" id="doc-ripr-conferma" placeholder="Scrivi RIPRISTINA per confermare" autocomplete="off" style="text-transform:uppercase;">
+        <button id="doc-ripr-ok" class="doc-btn rosso">Ripristina tutto</button> <button id="doc-ripr-annulla" class="doc-btn grigio">Annulla</button>
+      </div>` : `
+      <div class="doc-conferma">
+        <p>File <strong>${_h(r.nomeFile)}</strong>: backup del corso <strong>${_h(b.corso)}</strong> del ${_h(b.esportatoIl || '?')}, ${n} chiavi.</p>
+        <label class="doc-campo">Ripristina nel corso <input type="text" id="doc-ripr-dest" value="${_h(r.destinazione)}" autocomplete="off" style="text-transform:uppercase;"></label>
+        <div class="doc-sub" style="margin:-4px 0 8px 0;">Lascia il codice originale per riportare il corso com'era; scrivi un codice nuovo per ricrearlo come corso separato.</div>
+        <label style="display:block; margin-bottom:8px;"><input type="checkbox" id="doc-ripr-svuota" ${r.svuota ? 'checked' : ''}> Svuota prima il corso di destinazione (consigliato: il risultato è identico al backup)</label>
+        <p class="doc-sub">Se il corso di destinazione contiene già dati, prima del ripristino ne verrà scaricato automaticamente un backup di sicurezza.</p>
+        <input type="text" id="doc-ripr-conferma" placeholder="Ridigita il codice del corso di destinazione" autocomplete="off" style="text-transform:uppercase;">
+        <button id="doc-ripr-ok" class="doc-btn rosso">Ripristina</button> <button id="doc-ripr-annulla" class="doc-btn grigio">Annulla</button>
+      </div>`;
+  }
+  return `
+    <div class="doc-card">
+      <h3>📥 Scarica backup</h3>
+      <p class="doc-sub">Il backup è un file .json con tutti i dati del corso (cassetti e modifiche di ogni partecipante, numerazioni, impostazioni). Conservalo: con la sezione qui sotto lo puoi ripristinare.</p>
+      <div class="doc-riga"><select id="doc-backup-corso"><option value="">-- seleziona corso --</option>${corsi.map(c => `<option value="${_h(c.codice)}">${_h(c.codice)}</option>`).join('')}</select>
+        <button id="doc-backup-corso-btn" class="doc-btn">📥 Backup del corso</button></div>
+      <div class="doc-riga"><button id="doc-backup-tutti-btn" class="doc-btn">📥 Un file per ogni corso</button>
+        <button id="doc-backup-completo-btn" class="doc-btn">📦 Backup completo del database</button></div>
+      <p class="doc-sub">Il backup completo comprende anche elenco corsi, dispositivi e impostazioni: è quello da fare prima di interventi importanti.</p>
+    </div>
+    <div class="doc-card">
+      <h3>♻️ Ripristina da backup</h3>
+      <p class="doc-sub">Accetta sia i backup di un corso sia i backup completi (anche quelli scaricati con le versioni precedenti del programma).</p>
+      <input type="file" id="doc-ripr-file" accept=".json,application/json">
+      ${blocco}
+    </div>`;
+}
+
+function _htmlPulizia(corsi) {
+  const opzCorsi = (sel) => corsi.map(c => `<option value="${_h(c.codice)}" ${sel === c.codice ? 'selected' : ''}>${_h(c.codice)}</option>`).join('');
+  const rm = doc.rimozione;
+  const a = adminPulizia.analisi;
+  let analisiHtml = '';
+  if (a) {
+    const ov = a.ov || [];
+    const totale = a.ra.length + a.oa.length + a.op.length + ov.length;
+    const elenco = (arr) => arr.slice(0, 8).map(x => _h(x.rec.numero)).join(', ') + (arr.length > 8 ? '…' : '');
+    analisiHtml = totale === 0 ? `<p style="color:#1a6b2e;">Nessun elemento da eliminare per ${_h(adminPulizia.corso)}.</p>` : `
+      <div class="doc-conferma">
+        <p>Trovati <strong>${totale}</strong> elementi da eliminare in <strong>${_h(adminPulizia.corso)}</strong>:</p>
+        <ul>
+          <li>${a.ra.length} richiesta/e d'acquisto aperta/e: ${elenco(a.ra)}</li>
+          <li>${a.oa.length} ordine/i d'acquisto senza ricezioni: ${elenco(a.oa)}</li>
+          <li>${a.op.length} ordine/i di produzione non confermato/i: ${elenco(a.op)}</li>
+          <li>${ov.length} ordine/i di vendita senza consegne: ${elenco(ov)}</li>
+        </ul>
+        <input type="text" id="doc-pulizia-conferma" placeholder="Scrivi ELIMINA per confermare" autocomplete="off" style="text-transform:uppercase;">
+        <button id="doc-pulizia-ok" class="doc-btn rosso">🗑 Elimina questi ${totale} elementi</button>
+      </div>`;
+  }
+  return `
+    <div class="doc-avviso">Prima di ogni pulizia viene scaricato automaticamente un backup del corso interessato.</div>
+    <div class="doc-card">
+      <h3>Documenti non elaborati (creati prima di oggi)</h3>
+      <p class="doc-sub">Elimina in blocco: richieste d'acquisto ancora aperte, ordini d'acquisto senza nessuna riga ricevuta, ordini di produzione non confermati e ordini di vendita senza nessuna riga consegnata. Lavora sui dati grezzi, quindi risolve anche i casi con numero documento duplicato.</p>
+      <div class="doc-riga"><select id="doc-pulizia-corso"><option value="">-- seleziona corso --</option>${opzCorsi(adminPulizia.corso)}</select>
+        <button id="doc-pulizia-analizza" class="doc-btn" ${adminPulizia.corso ? '' : 'disabled'}>🔍 Analizza</button></div>
+      ${analisiHtml}
+    </div>
+    <div class="doc-card">
+      <h3>Rimuovi un partecipante</h3>
+      <p class="doc-sub">Cancella tutto ciò che un partecipante ha registrato nel corso (es. un nome scritto male o un accesso di prova). Attenzione: spariscono anche le modifiche che ha fatto su documenti di altri (conferme, ricezioni…), che tornano allo stato precedente.</p>
+      <div class="doc-riga"><select id="doc-rm-corso"><option value="">-- seleziona corso --</option>${opzCorsi(rm.corso)}</select>
+        ${rm.partecipanti ? `<select id="doc-rm-shard"><option value="">-- seleziona partecipante --</option>${rm.partecipanti.map(p => `<option value="${_h(p.shard)}" ${rm.shard === p.shard ? 'selected' : ''}>${_h(p.nome)} (${p.nChiavi} chiavi)</option>`).join('')}</select>` : ''}</div>
+      ${rm.shard && rm.chiavi ? `<div class="doc-conferma">
+        <p>Verranno eliminate <strong>${rm.chiavi.length}</strong> chiavi di <strong>${_h((rm.partecipanti.find(p => p.shard === rm.shard) || {}).nome || rm.shard)}</strong> nel corso ${_h(rm.corso)}.</p>
+        <input type="text" id="doc-rm-conferma" placeholder="Scrivi ELIMINA per confermare" autocomplete="off" style="text-transform:uppercase;">
+        <button id="doc-rm-ok" class="doc-btn rosso">Rimuovi partecipante</button></div>` : ''}
+    </div>
+    <div class="doc-card">
+      <h3>Svuota un corso (ripartire da zero)</h3>
+      <p class="doc-sub">Cancella tutti i dati del corso (anagrafiche, documenti, movimenti, partecipanti, numerazioni) ma lo lascia nell'elenco con le sue impostazioni: pronto per una nuova classe. Funziona anche sui corsi non in elenco.</p>
+      <div class="doc-riga"><input type="text" id="doc-svuota-corso" value="${_h(doc.svuota.corso)}" placeholder="Codice corso" autocomplete="off" style="text-transform:uppercase;">
+        <input type="text" id="doc-svuota-conferma" placeholder="Ridigita il codice" autocomplete="off" style="text-transform:uppercase;">
+        <button id="doc-svuota-ok" class="doc-btn rosso">Svuota corso</button></div>
+    </div>
+    <div class="doc-card">
+      <h3>Dispositivi inattivi</h3>
+      <p class="doc-sub">Toglie dall'elenco della scheda Dispositivi quelli che non si collegano da più di 30 giorni (non tocca blocchi né dispositivi del formatore).</p>
+      <button id="doc-presenze-pulisci" class="doc-btn">Pulisci elenco dispositivi</button>
+    </div>`;
+}
+
+async function _htmlDiagnostica() {
+  const logPersistente = (await _diagLeggiPersistente()).slice(-15).reverse();
+  let riepilogo = '';
+  try {
+    const chiavi = await remoteStorage.chiavi('');
+    const gruppi = {};
+    chiavi.forEach(({ key, agg }) => {
+      const g = key.split('::')[0];
+      const x = (gruppi[g] = gruppi[g] || { n: 0, agg: null }); x.n++;
+      if (agg && (!x.agg || agg > x.agg)) x.agg = agg;
     });
+    riepilogo = `<table class="doc-table"><tr><th>Gruppo di chiavi</th><th class="num">Chiavi</th><th>Ultima modifica</th></tr>
+      ${Object.keys(gruppi).sort().map(g => `<tr><td>${_h(g)}</td><td class="num">${gruppi[g].n}</td><td>${gruppi[g].agg ? _fmtTempo(Date.parse(gruppi[g].agg)) : '—'}</td></tr>`).join('')}
+      <tr><td><strong>Totale</strong></td><td class="num"><strong>${chiavi.length}</strong></td><td></td></tr></table>`;
+  } catch (e) { riepilogo = `<p style="color:#a83232;">Lettura non riuscita: ${_h(e.message || e)}</p>`; }
+  return `
+    <div class="doc-card">
+      <h3>Database</h3>
+      <p>Backend: <strong>${USA_SUPABASE ? 'Supabase' : 'Firebase'}</strong> — ${_h(USA_SUPABASE ? SUPABASE_URL : FIREBASE_URL)} — configurato: <strong style="color:${STORAGE_CONFIGURATO ? '#1a6b2e' : '#a83232'};">${STORAGE_CONFIGURATO ? 'sì' : 'NO'}</strong></p>
+      ${riepilogo}
+    </div>
+    <div class="doc-card">
+      <h3>Questa sessione / questo dispositivo</h3>
+      <p>Scritture riuscite: <strong>${_diagScrittureOk}</strong> · fallite: <strong style="color:${_diagScrittureFallite ? '#a83232' : 'inherit'};">${_diagScrittureFallite}</strong> · Letture: <strong>${_diagLetture}</strong> · non riuscite: <strong>${_diagLettureFallite}</strong> <span class="doc-sub">(normale per chiavi non ancora create)</span></p>
+      ${_diagUltimoErrore ? `<p style="color:#a83232;">Ultimo errore (${_h(_diagUltimoErrore.tipo)}, ${new Date(_diagUltimoErrore.ts).toLocaleTimeString()}): chiave "${_h(_diagUltimoErrore.key)}" — ${_h(_diagUltimoErrore.msg)}</p>` : '<p class="doc-sub">Nessun errore in questa sessione.</p>'}
+      <p><span id="doc-diag-copia" class="print-btn">📋 Copia log sessione (${_diagLogErrori.length})</span> &nbsp; <span id="doc-diag-copia-disp" class="print-btn">📋 Copia log dispositivo (${logPersistente.length})</span></p>
+      ${logPersistente.length ? `<div class="doc-scroll" style="max-height:160px;">${logPersistente.map(v => `<div class="doc-sub" style="color:#a83232;">[${new Date(v.ts).toLocaleString()}] ${_h(v.tipo)} chiave="${_h(v.key)}" — ${_h(v.msg)}</div>`).join('')}</div>` : ''}
+      <p class="doc-sub">ID di questo dispositivo: ${_h(getDeviceId())}</p>
+    </div>`;
+}
+
+// ---- Eventi ----
+function _collegaPannelloDocente() {
+  const $ = (id) => document.getElementById(id);
+  const su = (id, ev, fn) => { const el = $(id); if (el) el.addEventListener(ev, fn); };
+  const tutti = (sel, fn) => document.querySelectorAll(sel).forEach(el => el.addEventListener('click', () => fn(el)));
+
+  su('doc-esci', 'click', () => {
+    _inPannelloDocente = false; doc.msg = ''; doc.azioneCorso = null; doc.ripristino = null;
+    renderCorsoSelect();
   });
-  const cancelBtn = document.getElementById('admin-delete-cancel-btn');
-  if (cancelBtn) cancelBtn.addEventListener('click', () => { adminConfirmDelete = false; adminMsg=''; renderAdminPanel(); });
-  const confirmBtn = document.getElementById('admin-delete-confirm-btn');
-  if (confirmBtn) confirmBtn.addEventListener('click', async () => {
-    const corso = adminCorsoValue.trim().toUpperCase().replace(/[^A-Z0-9\-_]/g, '-');
-    const conferma = document.getElementById('admin-corso-confirm').value.trim().toUpperCase().replace(/[^A-Z0-9\-_]/g, '-');
-    if (conferma !== corso) { adminMsg = 'Errore: il codice digitato non corrisponde. Nulla è stato eliminato.'; renderAdminPanel(); return; }
+  document.querySelectorAll('.doc-tab[data-tab]').forEach(el => el.addEventListener('click', () => {
+    doc.tab = el.dataset.tab; doc.msg = ''; doc.azioneCorso = null; doc.bannaId = null; renderPannelloDocente();
+  }));
+  su('doc-ricarica', 'click', () => { doc.msg = ''; doc.partecipantiAperti = {}; renderPannelloDocente(); });
+  su('doc-annulla', 'click', () => { doc.azioneCorso = null; doc.bannaId = null; renderPannelloDocente(); });
+
+  // --- Corsi ---
+  su('doc-nuovo-corso', 'input', e => { doc.nuovoCorso = e.target.value; });
+  su('doc-nuovo-corso', 'keydown', e => { if (e.key === 'Enter') $('doc-crea').click(); });
+  su('doc-crea', 'click', () => _docEsegui(async () => {
+    const corso = _normCodiceCorso(doc.nuovoCorso);
+    if (!corso) { _docMsg('Inserisci un codice corso.', true); return; }
+    const creato = await registraCorso(corso);
+    _docMsg(creato ? `Corso ${corso} creato: ora i corsisti possono selezionarlo.` : `Il corso ${corso} esiste già.`, !creato);
+    if (creato) doc.nuovoCorso = '';
+  }));
+  tutti('.doc-giacneg', el => _docEsegui(async () => {
+    const cod = el.dataset.corso;
+    const imp = { ...(await leggiImpostazioniCorso(cod)) };
+    imp.giacenzaNegativa = !imp.giacenzaNegativa;
+    await setRaw('corso_' + cod + '::impostazioni', imp);
+    _docMsg(`Corso ${cod}: giacenza negativa ${imp.giacenzaNegativa ? 'CONSENTITA' : 'bloccata'}.`);
+  }));
+  tutti('.doc-part', el => _docEsegui(async () => {
+    const cod = el.dataset.corso;
+    if (doc.partecipantiAperti[cod]) { delete doc.partecipantiAperti[cod]; return; }
+    doc.partecipantiAperti[cod] = await _partecipantiCorso(cod);
+  }));
+  tutti('.doc-backup', el => _docEsegui(async () => {
+    const n = await scaricaBackupCorso(el.dataset.corso);
+    _docMsg(`Backup di ${el.dataset.corso} scaricato (${n} chiavi).`);
+  }));
+  tutti('.doc-duplica', el => { doc.azioneCorso = { tipo: 'duplica', corso: el.dataset.corso }; renderPannelloDocente(); });
+  tutti('.doc-elimina', el => { doc.azioneCorso = { tipo: 'elimina', corso: el.dataset.corso }; renderPannelloDocente(); });
+  tutti('.doc-registra', el => _docEsegui(async () => {
+    await registraCorso(el.dataset.corso);
+    _docMsg(`Corso ${el.dataset.corso} aggiunto all'elenco.`);
+  }));
+  su('doc-elimina-ok', 'click', () => _docEsegui(async () => {
+    const corso = doc.azioneCorso.corso;
+    if (_normCodiceCorso($('doc-conferma-elimina').value) !== corso) { _docMsg('Il codice digitato non corrisponde. Nulla è stato eliminato.', true); return; }
     await eliminaCorso(corso);
-    adminMsg = `Corso ${corso} eliminato completamente e rimosso dall'elenco.`;
-    adminConfirmDelete = false;
-    renderAdminPanel();
-  });
-  const puliziaCorsoSel = document.getElementById('admin-pulizia-corso');
-  if (puliziaCorsoSel) puliziaCorsoSel.addEventListener('change', e => { adminPulizia.corso = e.target.value; adminPulizia.analisi = null; renderAdminPanel(); });
-  const puliziaAnalizzaBtn = document.getElementById('admin-pulizia-analizza-btn');
-  if (puliziaAnalizzaBtn) puliziaAnalizzaBtn.addEventListener('click', async () => {
-    if (!adminPulizia.corso) return;
-    adminMsg = '';
-    puliziaAnalizzaBtn.textContent = 'Analisi in corso…'; puliziaAnalizzaBtn.disabled = true;
-    try {
-      adminPulizia.analisi = await analizzaPuliziaCorso(adminPulizia.corso);
-    } catch (e) {
-      adminMsg = 'Errore durante l\'analisi: ' + (e && e.message || e);
+    doc.azioneCorso = null; delete doc.partecipantiAperti[corso];
+    _docMsg(`Corso ${corso} eliminato completamente e rimosso dall'elenco.`);
+  }));
+  su('doc-duplica-ok', 'click', () => _docEsegui(async () => {
+    const origine = doc.azioneCorso.corso;
+    const dest = _normCodiceCorso($('doc-duplica-dest').value);
+    if (!dest || dest === origine) { _docMsg('Inserisci un codice diverso da quello di origine.', true); return; }
+    if ((await remoteStorage.chiavi('corso_' + dest + '::')).length || await remoteStorage.get('corsiRegistrati::' + dest)) {
+      _docMsg(`Il corso ${dest} esiste già (o contiene dati): scegli un altro codice.`, true); return;
     }
-    renderAdminPanel();
-  });
-  const puliziaEseguiBtn = document.getElementById('admin-pulizia-esegui-btn');
-  if (puliziaEseguiBtn) puliziaEseguiBtn.addEventListener('click', async () => {
-    const conferma = (document.getElementById('admin-pulizia-confirm').value || '').trim().toUpperCase();
-    if (conferma !== 'ELIMINA') { adminMsg = 'Errore: scrivi esattamente ELIMINA per confermare. Nulla è stato eliminato.'; renderAdminPanel(); return; }
-    adminPulizia.inCorso = true;
-    renderAdminPanel();
+    const { chiavi, errori } = await duplicaCorso(origine, dest);
+    doc.azioneCorso = null;
+    _docMsg(errori ? `Copia di ${origine} in ${dest} completata con ${errori} errori su ${chiavi} chiavi: controlla la Diagnostica.` : `Corso ${dest} creato come copia di ${origine} (${chiavi} chiavi).`, !!errori);
+  }));
+
+  // --- Dispositivi ---
+  su('doc-filtro-disp', 'change', e => { doc.filtroDispositivi = e.target.value; renderPannelloDocente(); });
+  tutti('.doc-banna', el => { doc.bannaId = el.dataset.id; renderPannelloDocente(); });
+  su('doc-banna-ok', 'click', () => _docEsegui(async () => {
+    await bannaDispositivo(doc.bannaId, ($('doc-banna-motivo').value || '').trim() || 'bloccato dal formatore');
+    doc.bannaId = null;
+    _docMsg('Dispositivo bloccato: il programma su quel dispositivo si chiuderà entro pochi minuti.');
+  }));
+  tutti('.doc-sblocca', el => _docEsegui(async () => { await sbloccaDispositivo(el.dataset.id); _docMsg('Dispositivo sbloccato.'); }));
+  tutti('.doc-revoca', el => _docEsegui(async () => { await revocaDispositivoFidato(el.dataset.id); _docMsg('Dispositivo rimosso dai dispositivi del formatore.'); }));
+
+  // --- Backup ---
+  su('doc-backup-corso-btn', 'click', () => _docEsegui(async () => {
+    const c = $('doc-backup-corso').value;
+    if (!c) { _docMsg('Seleziona un corso.', true); return; }
+    const n = await scaricaBackupCorso(c);
+    _docMsg(`Backup di ${c} scaricato (${n} chiavi).`);
+  }));
+  su('doc-backup-tutti-btn', 'click', () => _docEsegui(async () => {
+    const corsi = await caricaElencoCorsi();
+    for (const c of corsi) { _docProgresso('Backup ' + c.codice + '…'); await scaricaBackupCorso(c.codice); await attesa(400); }
+    _docMsg(`Scaricati ${corsi.length} file di backup (uno per corso).`);
+  }));
+  su('doc-backup-completo-btn', 'click', () => _docEsegui(async () => {
+    _docProgresso('Lettura di tutto il database…');
+    const n = await scaricaBackupCompleto();
+    _docMsg(`Backup completo scaricato (${n} chiavi).`);
+  }));
+  su('doc-ripr-file', 'change', async e => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
     try {
-      await eseguiPuliziaCorso(adminPulizia.analisi);
-      adminMsg = `Pulizia completata su ${adminPulizia.corso}.`;
-    } catch (e) {
-      adminMsg = 'Errore durante l\'eliminazione (potrebbe essere stata solo parziale): ' + (e && e.message || e);
+      const b = JSON.parse(await f.text());
+      if (!b || typeof b.dati !== 'object' || Array.isArray(b.dati)) throw new Error('il file non contiene la sezione "dati"');
+      if (b.tipo !== 'completo' && !b.corso) throw new Error('il file non indica a quale corso appartiene');
+      if (b.tipo !== 'completo') {
+        const pre = 'corso_' + b.corso + '::';
+        const estranee = Object.keys(b.dati).filter(k => k.indexOf(pre) !== 0);
+        if (estranee.length) throw new Error(`contiene chiavi di altri corsi (es. "${estranee[0]}")`);
+      }
+      doc.ripristino = { nomeFile: f.name, backup: b, destinazione: b.corso || '', svuota: true };
+      _docMsg('');
+    } catch (err) {
+      doc.ripristino = null;
+      _docMsg('File di backup non valido: ' + (err && err.message || err), true);
     }
-    adminPulizia.inCorso = false;
+    renderPannelloDocente();
+  });
+  su('doc-ripr-dest', 'input', e => { doc.ripristino.destinazione = e.target.value; });
+  su('doc-ripr-svuota', 'change', e => { doc.ripristino.svuota = e.target.checked; });
+  su('doc-ripr-annulla', 'click', () => { doc.ripristino = null; renderPannelloDocente(); });
+  su('doc-ripr-ok', 'click', () => _docEsegui(async () => {
+    const r = doc.ripristino, b = r.backup;
+    const conferma = ($('doc-ripr-conferma').value || '').trim().toUpperCase();
+    if (b.tipo === 'completo') {
+      if (conferma !== 'RIPRISTINA') { _docMsg('Scrivi esattamente RIPRISTINA per confermare. Nulla è stato modificato.', true); return; }
+      _docProgresso('Backup di sicurezza dello stato attuale…');
+      await scaricaBackupCompleto();
+      const errori = await _scriviChiavi(_backupInCoppie(b), 'Ripristino');
+      doc.ripristino = null;
+      _docMsg(errori ? `Ripristino completato con ${errori} errori: controlla la Diagnostica.` : 'Ripristino completo eseguito.', !!errori);
+      return;
+    }
+    const dest = _normCodiceCorso(r.destinazione);
+    if (!dest) { _docMsg('Indica il corso di destinazione.', true); return; }
+    if (_normCodiceCorso(conferma) !== dest) { _docMsg('Il codice di conferma non corrisponde al corso di destinazione. Nulla è stato modificato.', true); return; }
+    const esistenti = (await remoteStorage.chiavi('corso_' + dest + '::')).map(x => x.key);
+    if (esistenti.length) { _docProgresso('Backup di sicurezza di ' + dest + '…'); await scaricaBackupCorso(dest); }
+    if (r.svuota && esistenti.length) await _eliminaChiavi(esistenti, 'Svuotamento ' + dest);
+    const pre = 'corso_' + b.corso + '::', nuovo = 'corso_' + dest + '::';
+    const coppie = _backupInCoppie(b).map(([k, v]) => [nuovo + k.slice(pre.length), v]);
+    const errori = await _scriviChiavi(coppie, 'Ripristino ' + dest);
+    await registraCorso(dest);
+    doc.ripristino = null;
+    _docMsg(errori ? `Ripristino di ${dest} completato con ${errori} errori su ${coppie.length} chiavi: controlla la Diagnostica.` : `Corso ${dest} ripristinato dal backup (${coppie.length} chiavi).`, !!errori);
+  }));
+
+  // --- Pulizia ---
+  su('doc-pulizia-corso', 'change', e => { adminPulizia.corso = e.target.value; adminPulizia.analisi = null; renderPannelloDocente(); });
+  su('doc-pulizia-analizza', 'click', () => _docEsegui(async () => {
+    _docProgresso('Analisi di ' + adminPulizia.corso + '…');
+    adminPulizia.analisi = await analizzaPuliziaCorso(adminPulizia.corso);
+  }));
+  su('doc-pulizia-ok', 'click', () => _docEsegui(async () => {
+    if (($('doc-pulizia-conferma').value || '').trim().toUpperCase() !== 'ELIMINA') { _docMsg('Scrivi esattamente ELIMINA per confermare. Nulla è stato eliminato.', true); return; }
+    _docProgresso('Backup di sicurezza di ' + adminPulizia.corso + '…');
+    await scaricaBackupCorso(adminPulizia.corso);
+    _docProgresso('Eliminazione in corso…');
+    try { await eseguiPuliziaCorso(adminPulizia.analisi); _docMsg(`Pulizia completata su ${adminPulizia.corso}.`); }
+    catch (e) { _docMsg('Errore durante l\'eliminazione (potrebbe essere stata solo parziale): ' + (e && e.message || e), true); }
     adminPulizia.analisi = null;
-    renderAdminPanel();
+  }));
+  su('doc-rm-corso', 'change', e => _docEsegui(async () => {
+    doc.rimozione = { corso: e.target.value, partecipanti: null, shard: '', chiavi: null };
+    if (doc.rimozione.corso) doc.rimozione.partecipanti = await _partecipantiCorso(doc.rimozione.corso);
+  }));
+  su('doc-rm-shard', 'change', e => _docEsegui(async () => {
+    const rm = doc.rimozione; rm.shard = e.target.value; rm.chiavi = null;
+    if (rm.shard) rm.chiavi = await _chiaviPartecipante(rm.corso, rm.shard);
+  }));
+  su('doc-rm-ok', 'click', () => _docEsegui(async () => {
+    const rm = doc.rimozione;
+    if (($('doc-rm-conferma').value || '').trim().toUpperCase() !== 'ELIMINA') { _docMsg('Scrivi esattamente ELIMINA per confermare. Nulla è stato eliminato.', true); return; }
+    _docProgresso('Backup di sicurezza di ' + rm.corso + '…');
+    await scaricaBackupCorso(rm.corso);
+    const errori = await _eliminaChiavi(rm.chiavi, 'Rimozione');
+    const nome = (rm.partecipanti.find(p => p.shard === rm.shard) || {}).nome || rm.shard;
+    delete doc.partecipantiAperti[rm.corso];
+    doc.rimozione = { corso: rm.corso, partecipanti: await _partecipantiCorso(rm.corso), shard: '', chiavi: null };
+    _docMsg(errori ? `Rimozione di ${nome} con ${errori} errori: controlla la Diagnostica.` : `${nome} rimosso dal corso ${rm.corso}.`, !!errori);
+  }));
+  su('doc-svuota-corso', 'input', e => { doc.svuota.corso = e.target.value; });
+  su('doc-svuota-ok', 'click', () => _docEsegui(async () => {
+    const corso = _normCodiceCorso(doc.svuota.corso);
+    if (!corso) { _docMsg('Indica il codice del corso.', true); return; }
+    if (_normCodiceCorso($('doc-svuota-conferma').value) !== corso) { _docMsg('Il codice di conferma non corrisponde. Nulla è stato eliminato.', true); return; }
+    const chiavi = (await remoteStorage.chiavi('corso_' + corso + '::')).map(x => x.key).filter(k => k !== 'corso_' + corso + '::impostazioni');
+    if (!chiavi.length) { _docMsg(`Il corso ${corso} è già vuoto.`); return; }
+    _docProgresso('Backup di sicurezza di ' + corso + '…');
+    await scaricaBackupCorso(corso);
+    const errori = await _eliminaChiavi(chiavi, 'Svuotamento ' + corso);
+    delete doc.partecipantiAperti[corso];
+    doc.svuota.corso = '';
+    _docMsg(errori ? `Svuotamento di ${corso} con ${errori} errori: controlla la Diagnostica.` : `Corso ${corso} svuotato (${chiavi.length} chiavi eliminate).`, !!errori);
+  }));
+  su('doc-presenze-pulisci', 'click', () => _docEsegui(async () => {
+    const vecchie = (await _leggiPresenze()).filter(p => Date.now() - p.ts > 30 * 86400000).map(p => 'dispositiviAttivi::' + p.id);
+    await _eliminaChiavi(vecchie, 'Pulizia dispositivi');
+    _docMsg(`Rimossi ${vecchie.length} dispositivi inattivi da più di 30 giorni.`);
+  }));
+
+  // --- Diagnostica ---
+  const copia = async (testo, ok) => {
+    try { await navigator.clipboard.writeText(testo); _docMsg(ok); } catch (e) { _docMsg('Copia negli appunti non riuscita: ' + testo, true); }
+    renderPannelloDocente();
+  };
+  su('doc-diag-copia', 'click', () => copia(_diagLogErrori.map(v => `[${new Date(v.ts).toLocaleString()}] ${v.tipo} chiave="${v.key}" — ${v.msg}`).join('\n') || '(nessun errore registrato)', 'Log copiato negli appunti.'));
+  su('doc-diag-copia-disp', 'click', async () => {
+    const log = (await _diagLeggiPersistente()).slice(-15).reverse();
+    copia(log.map(v => `[${new Date(v.ts).toLocaleString()}] ${v.tipo} chiave="${v.key}" — ${v.msg}`).join('\n') || '(nessun errore registrato su questo dispositivo)', 'Log dispositivo copiato negli appunti.');
   });
+}
+
+// Partecipanti di un corso con il numero di chiavi (cassetti + patch) che possiedono.
+async function _partecipantiCorso(corso) {
+  const [mappa, chiavi] = await Promise.all([remoteStorage.getPrefix('corso_' + corso + '::partecipanti::'), remoteStorage.chiavi('corso_' + corso + '::')]);
+  const conta = {};
+  chiavi.forEach(({ key }) => { const m = /::(?:u|patch)::(.+)$/.exec(key); if (m) conta[m[1]] = (conta[m[1]] || 0) + 1; });
+  const elenco = Object.keys(mappa).map(k => { let v = {}; try { v = JSON.parse(mappa[k]) || {}; } catch (e) {} return { shard: v.shard || k.split('::').pop(), nome: v.nome || k.split('::').pop(), primoAccesso: v.primoAccesso || '' }; });
+  // cassetti con dati ma senza scheda partecipante (es. dati migrati dal vecchio formato)
+  Object.keys(conta).forEach(sh => { if (!elenco.some(p => p.shard === sh)) elenco.push({ shard: sh, nome: sh + ' (senza scheda)', primoAccesso: '' }); });
+  elenco.forEach(p => { p.nChiavi = conta[p.shard] || 0; });
+  return elenco.sort((a, b) => String(a.nome).localeCompare(String(b.nome)));
+}
+async function _chiaviPartecipante(corso, shard) {
+  const chiavi = await remoteStorage.chiavi('corso_' + corso + '::');
+  return chiavi.map(x => x.key).filter(k => k.endsWith('::u::' + shard) || k.endsWith('::patch::' + shard) || k === 'corso_' + corso + '::partecipanti::' + shard);
 }
 
 function renderLogin() {
@@ -1549,6 +2094,7 @@ let _ultimoAggiornamentoDati = 0;
 async function aggiornaDatiCondivisi(forza) {
   if (!forza && Date.now() - _ultimoAggiornamentoDati < 4000) return;
   _ultimoAggiornamentoDati = Date.now();
+  registraPresenzaDispositivo();
   try {
     await caricaCacheCorso();
     materiali = await loadList('materiali');
@@ -6303,6 +6849,7 @@ async function boot() {
 
   screen = 'easy';
   renderMain();
+  avviaPresenzaDispositivo();
 }
 
 function render() { renderMain(); }
