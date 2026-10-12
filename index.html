@@ -300,6 +300,20 @@ async function _sbVerifica(res, azione, key) {
     throw new Error(`Supabase ha rifiutato la ${azione} su "${key}": HTTP ${res.status}${corpo ? ' — ' + corpo.slice(0, 200) : ''}`);
   }
 }
+// Modalità docente: dopo l'accesso con i PIN (verificati dal server) si riceve un token di sessione.
+// Con il token, scritture e cancellazioni passano dalle funzioni protette docente_* (le uniche che
+// possono toccare corsi, impostazioni, dispositivi e cancellare); senza, valgono le regole dei corsisti.
+let _tokenDocente = null;
+async function _sbRpc(funzione, parametri) {
+  const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/' + funzione, { method: 'POST', headers: _sbHeaders(), body: JSON.stringify(parametri) });
+  if (!res.ok) {
+    let corpo = ''; try { corpo = await res.text(); } catch (e) {}
+    let messaggio = corpo; try { messaggio = JSON.parse(corpo).message || corpo; } catch (e) {}
+    throw new Error(`${funzione}: ${messaggio || 'HTTP ' + res.status}`);
+  }
+  const testo = await res.text();
+  return testo ? JSON.parse(testo) : null;
+}
 const remoteStorageSupabase = {
   async get(key) {
     const res = await fetch(SUPABASE_URL + '/rest/v1/storage?select=value&key=eq.' + encodeURIComponent(key), { headers: _sbHeaders(), cache: 'no-store' });
@@ -321,13 +335,19 @@ const remoteStorageSupabase = {
     return mappa;
   },
   async set(key, value) {
+    if (_tokenDocente) { await _sbRpc('docente_scrivi', { p_token: _tokenDocente, p_righe: [{ key, value }] }); return; }
     const res = await fetch(SUPABASE_URL + '/rest/v1/storage?on_conflict=key', { method: 'POST',
       headers: _sbHeaders({ Prefer: 'resolution=merge-duplicates,return=minimal' }), body: JSON.stringify({ key, value, updated_at: new Date().toISOString() }) });
     await _sbVerifica(res, 'scrittura', key);
   },
   async delete(key) {
+    if (_tokenDocente) { await _sbRpc('docente_elimina', { p_token: _tokenDocente, p_chiavi: [key] }); return; }
     const res = await fetch(SUPABASE_URL + '/rest/v1/storage?key=eq.' + encodeURIComponent(key), { method: 'DELETE', headers: _sbHeaders() });
     await _sbVerifica(res, 'eliminazione', key);
+  },
+  // Cancellazione in blocco (solo docente).
+  async deleteMolti(chiavi) {
+    await _sbRpc('docente_elimina', { p_token: _tokenDocente, p_chiavi: chiavi });
   },
   // Contatore atomico (funzione SQL incrementa_contatore): restituisce il nuovo valore.
   async incrementa(key) {
@@ -351,6 +371,7 @@ const remoteStorageSupabase = {
   },
   // Scrittura in blocco (ripristino backup): un'unica richiesta per un gruppo di chiavi. coppie = [[key, valoreStringa], ...]
   async setMolti(coppie) {
+    if (_tokenDocente) { await _sbRpc('docente_scrivi', { p_token: _tokenDocente, p_righe: coppie.map(([key, value]) => ({ key, value })) }); return; }
     const ora = new Date().toISOString();
     const res = await fetch(SUPABASE_URL + '/rest/v1/storage?on_conflict=key', { method: 'POST',
       headers: _sbHeaders({ Prefer: 'resolution=merge-duplicates,return=minimal' }),
@@ -1135,9 +1156,15 @@ async function renderCorsoSelect() {
   }
 }
 
-const ADMIN_PIN_1 = '2026'; // primo PIN — cambiali modificando queste due righe nel codice
-const ADMIN_PIN_2 = '7391'; // secondo PIN — richiesto SUBITO dopo il primo, nella stessa sequenza
-
+// I PIN del Pannello docente NON sono scritti qui: con Supabase li verifica il server (funzione docente_accesso,
+// vedi supabase/sicurezza.sql) e si cambiano dal pannello. Solo per il vecchio backend Firebase resta un controllo
+// locale, su un'impronta SHA-256 di "PIN1:PIN2" (non sui PIN in chiaro).
+const ADMIN_PIN_HASH_FIREBASE = '6313082177df2de0051dd94d6aa9beb2092cdf1266a6f8b51bdc10398d1f19ae';
+async function _sha256Hex(testo) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(testo));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+let _pin1Inserito = '';
 let _adminPinFase = 1; // 1 = primo PIN, 2 = secondo PIN
 function renderAdminPin() {
   _adminPinFase = 1;
@@ -1160,18 +1187,32 @@ function _renderAdminPinInterno() {
   const btn = document.getElementById('admin-pin-btn');
   const input = document.getElementById('admin-pin');
   const check = async () => {
-    const pinAtteso = _adminPinFase === 1 ? ADMIN_PIN_1 : ADMIN_PIN_2;
-    if (input.value === pinAtteso) {
-      if (_adminPinFase === 1) { _adminPinFase = 2; _renderAdminPinInterno(); }
-      else { await segnaDispositivoFidato(); renderAdminPanel(); }
+    if (_adminPinFase === 1) { _pin1Inserito = input.value; _adminPinFase = 2; _renderAdminPinInterno(); return; }
+    const pin1 = _pin1Inserito; _pin1Inserito = '';
+    btn.disabled = true; btn.textContent = 'Verifica…';
+    if (USA_SUPABASE) {
+      let r;
+      try { r = await _sbRpc('docente_accesso', { p_pin1: pin1, p_pin2: input.value, p_dispositivo: getDeviceId() }); }
+      catch (e) { r = { ok: false, errore: String(e && e.message || e) }; }
+      if (r && r.ok) { _tokenDocente = r.token; renderAdminPanel(); return; }
+      if (r && r.bannato) { renderDispositivoBannato(await dispositivoBannato()); return; }
+      _adminPinFase = 1; _renderAdminPinInterno();
+      const nuovoInput = document.getElementById('admin-pin');
+      nuovoInput.style.borderColor = '#a83232';
+      nuovoInput.placeholder = r && r.troppiTentativi ? 'Troppi tentativi: riprova tra 15 minuti' : r && r.errore ? 'Errore di collegamento, riprova' : 'PIN errati, ricomincia dal primo';
+      return;
+    }
+    if (await _sha256Hex(pin1 + ':' + input.value) === ADMIN_PIN_HASH_FIREBASE) {
+      await segnaDispositivoFidato(); renderAdminPanel();
     } else if (await dispositivoFidato()) {
       // Dispositivo già autenticato con successo in passato: solo respinto, niente ban
       // (protegge il formatore da un ban per un semplice errore di battitura).
-      input.style.borderColor = '#a83232'; input.value = '';
-      input.placeholder = 'PIN errato, riprova';
+      _adminPinFase = 1; _renderAdminPinInterno();
+      const nuovoInput = document.getElementById('admin-pin');
+      nuovoInput.style.borderColor = '#a83232'; nuovoInput.placeholder = 'PIN errati, ricomincia dal primo';
     } else {
       // Dispositivo mai autenticato con successo prima d'ora: PIN sbagliato → ban immediato.
-      await bannaDispositivoCorrente('PIN Amministrazione errato (fase ' + _adminPinFase + ')');
+      await bannaDispositivoCorrente('PIN Pannello docente errato');
       const ban = await dispositivoBannato();
       renderDispositivoBannato(ban);
     }
@@ -1322,6 +1363,7 @@ const doc = {
   ripristino: null,         // { nomeFile, backup, destinazione, svuota }
   rimozione: { corso: '', partecipanti: null, shard: '', chiavi: null },
   svuota: { corso: '' },
+  filtroStorico: '',        // filtro sulle chiavi nello storico versioni
   progresso: '',            // testo di avanzamento delle operazioni lunghe
   occupato: false,
 };
@@ -1349,6 +1391,18 @@ async function _inParallelo(elementi, n, fn) {
 }
 async function _eliminaChiavi(chiavi, etichetta) {
   let fatte = 0, errori = 0;
+  if (_tokenDocente && remoteStorage.deleteMolti) {
+    for (let i = 0; i < chiavi.length; i += 200) {
+      const gruppo = chiavi.slice(i, i + 200);
+      try { await remoteStorage.deleteMolti(gruppo); }
+      catch (e) {
+        if (/Sessione docente/.test(e.message)) throw e;
+        errori += gruppo.length; _diagRegistraErrore('eliminazione', gruppo[0] + '…', e);
+      }
+      _docProgresso(`${etichetta}: ${Math.min(i + 200, chiavi.length)}/${chiavi.length}`);
+    }
+    return errori;
+  }
   await _inParallelo(chiavi, 6, async (k) => {
     try { await remoteStorage.delete(k); } catch (e) { errori++; _diagRegistraErrore('eliminazione', k, e); }
     fatte++;
@@ -1495,7 +1549,7 @@ async function renderAdminPanel() { return renderPannelloDocente(); }
 async function renderPannelloDocente() {
   _inPannelloDocente = true;
   const app = document.getElementById('app');
-  const schede = [['corsi', '📚 Corsi'], ['dispositivi', '💻 Dispositivi'], ['backup', '💾 Backup e ripristino'], ['pulizia', '🧹 Pulizia dati'], ['diagnostica', '🩺 Diagnostica']];
+  const schede = [['corsi', '📚 Corsi'], ['dispositivi', '💻 Dispositivi'], ['backup', '💾 Backup e ripristino'], ['pulizia', '🧹 Pulizia dati'], ['sicurezza', '🔐 Sicurezza'], ['diagnostica', '🩺 Diagnostica']];
   const intestazione = `
     <div class="titlebar"><div class="titlebar-left"><div class="logo">S</div><span class="name">GRS Solutions ERP — Pannello docente</span></div>
       <span id="doc-esci" style="cursor:pointer; text-decoration:underline; font-size:11px;">← esci dal pannello</span></div>
@@ -1508,6 +1562,7 @@ async function renderPannelloDocente() {
     else if (doc.tab === 'dispositivi') corpo = _htmlDispositivi(await _datiSchedaDispositivi());
     else if (doc.tab === 'backup') corpo = _htmlBackup(await caricaElencoCorsi());
     else if (doc.tab === 'pulizia') corpo = _htmlPulizia(await caricaElencoCorsi());
+    else if (doc.tab === 'sicurezza') corpo = await _htmlSicurezza();
     else corpo = await _htmlDiagnostica();
   } catch (e) {
     corpo = `<div class="doc-card"><p style="color:#a83232;">Impossibile leggere il database: ${_h(e && e.message || e)}</p></div>`;
@@ -1526,6 +1581,7 @@ async function _docEsegui(fn) {
   try { await fn(); }
   catch (e) { _docMsg('Errore: ' + (e && e.message || e), true); }
   doc.occupato = false; doc.progresso = '';
+  if (/Sessione docente non valida/.test(doc.msg)) { _tokenDocente = null; _inPannelloDocente = false; renderAdminPin(); return; }
   renderPannelloDocente();
 }
 
@@ -1725,6 +1781,42 @@ function _htmlPulizia(corsi) {
     </div>`;
 }
 
+async function _htmlSicurezza() {
+  if (!USA_SUPABASE) return `<div class="doc-card"><p>La protezione lato server, il cambio PIN e lo storico versioni sono disponibili solo con il database Supabase.</p></div>`;
+  const righe = await _sbRpc('docente_storico', { p_token: _tokenDocente, p_filtro: doc.filtroStorico.trim() });
+  return `
+    <div class="doc-card">
+      <h3>Protezione attiva sul server</h3>
+      <ul style="margin:4px 0 4px 18px; padding:0;">
+        <li>I corsisti possono solo lavorare nei dati dei corsi: non possono cancellare nulla, né creare o modificare corsi, impostazioni, dispositivi bloccati o fidati.</li>
+        <li>I PIN non sono più scritti nella pagina: li verifica il server. Dopo 5 errori da uno stesso dispositivo (o 30 in totale) l'accesso è sospeso per 15 minuti.</li>
+        <li>Ogni dato cancellato o "ridotto" (es. un cassetto svuotato) viene conservato qui sotto per 30 giorni e si può ripristinare.</li>
+      </ul>
+    </div>
+    <div class="doc-card">
+      <h3>Cambia PIN</h3>
+      <p class="doc-sub">Almeno 4 caratteri ciascuno. Dopo il cambio, le altre sessioni docente aperte vengono chiuse.</p>
+      <div class="doc-riga">
+        <input type="password" id="doc-pin1" placeholder="Nuovo primo PIN" autocomplete="new-password" style="padding:6px; border:1px solid #7f9db9;">
+        <input type="password" id="doc-pin2" placeholder="Nuovo secondo PIN" autocomplete="new-password" style="padding:6px; border:1px solid #7f9db9;">
+        <input type="password" id="doc-pin2b" placeholder="Ripeti secondo PIN" autocomplete="new-password" style="padding:6px; border:1px solid #7f9db9;">
+        <button id="doc-pin-ok" class="doc-btn">Salva nuovi PIN</button>
+      </div>
+    </div>
+    <div class="doc-card">
+      <h3>🕘 Versioni precedenti (ultimi 30 giorni)</h3>
+      <p class="doc-sub">Copia di ogni dato prima che venisse cancellato o accorciato. "Ripristina" rimette quella versione al posto di quella attuale: se non sei sicuro, scarica prima il backup del corso.</p>
+      <div class="doc-riga"><input type="text" id="doc-storico-filtro" value="${_h(doc.filtroStorico)}" placeholder="Filtra (es. PRATOMAG, ordiniAcquisto, mario)" autocomplete="off">
+        <button id="doc-storico-cerca" class="doc-btn">Cerca</button></div>
+      ${!righe.length ? '<p class="doc-sub">Nessuna versione salvata.</p>' : `<div class="doc-scroll" style="max-height:420px;"><table class="doc-table">
+        <tr><th>Quando</th><th>Operazione</th><th>Chiave</th><th class="num">Dimensione</th><th></th></tr>
+        ${righe.map(r => `<tr><td>${_fmtTempo(Date.parse(r.ts))}</td><td>${r.operazione === 'eliminata' ? '<span class="doc-pill rosso">eliminata</span>' : '<span class="doc-pill giallo">ridotta</span>'}</td>
+          <td style="word-break:break-all;">${_h(r.key)}</td><td class="num">${(r.lunghezza / 1024).toFixed(1)} KB</td>
+          <td class="doc-azioni"><span class="print-btn doc-ver-scarica" data-id="${r.id}">📥 scarica</span><span class="print-btn doc-ver-ripr" data-id="${r.id}" style="color:#a83232;">↩ ripristina</span></td></tr>`).join('')}
+      </table></div>`}
+    </div>`;
+}
+
 async function _htmlDiagnostica() {
   const logPersistente = (await _diagLeggiPersistente()).slice(-15).reverse();
   let riepilogo = '';
@@ -1763,6 +1855,7 @@ function _collegaPannelloDocente() {
   const tutti = (sel, fn) => document.querySelectorAll(sel).forEach(el => el.addEventListener('click', () => fn(el)));
 
   su('doc-esci', 'click', () => {
+    if (_tokenDocente) { _sbRpc('docente_esci', { p_token: _tokenDocente }).catch(() => {}); _tokenDocente = null; }
     _inPannelloDocente = false; doc.msg = ''; doc.azioneCorso = null; doc.ripristino = null;
     renderCorsoSelect();
   });
@@ -1951,6 +2044,28 @@ function _collegaPannelloDocente() {
     const vecchie = (await _leggiPresenze()).filter(p => Date.now() - p.ts > 30 * 86400000).map(p => 'dispositiviAttivi::' + p.id);
     await _eliminaChiavi(vecchie, 'Pulizia dispositivi');
     _docMsg(`Rimossi ${vecchie.length} dispositivi inattivi da più di 30 giorni.`);
+  }));
+
+  // --- Sicurezza ---
+  su('doc-pin-ok', 'click', () => _docEsegui(async () => {
+    const p1 = $('doc-pin1').value, p2 = $('doc-pin2').value, p2b = $('doc-pin2b').value;
+    if (p2 !== p2b) { _docMsg('Il secondo PIN e la sua ripetizione non coincidono. Nulla è stato cambiato.', true); return; }
+    if (p1.length < 4 || p2.length < 4) { _docMsg('Ogni PIN deve avere almeno 4 caratteri.', true); return; }
+    await _sbRpc('docente_cambia_pin', { p_token: _tokenDocente, p_pin1: p1, p_pin2: p2 });
+    _docMsg('PIN cambiati. Dal prossimo accesso valgono i nuovi.');
+  }));
+  su('doc-storico-filtro', 'input', e => { doc.filtroStorico = e.target.value; });
+  su('doc-storico-filtro', 'keydown', e => { if (e.key === 'Enter') $('doc-storico-cerca').click(); });
+  su('doc-storico-cerca', 'click', () => renderPannelloDocente());
+  tutti('.doc-ver-scarica', el => _docEsegui(async () => {
+    const v = await _sbRpc('docente_versione', { p_token: _tokenDocente, p_id: Number(el.dataset.id) });
+    let valore = v.value; try { valore = JSON.parse(v.value); } catch (e) {}
+    _scaricaFileJson('versione_' + v.key.replace(/[^A-Za-z0-9_-]+/g, '_') + '_' + el.dataset.id + '.json', { key: v.key, salvataIl: v.ts, operazione: v.operazione, valore });
+    _docMsg('Versione scaricata.');
+  }));
+  tutti('.doc-ver-ripr', el => _docEsegui(async () => {
+    const chiave = await _sbRpc('docente_ripristina_versione', { p_token: _tokenDocente, p_id: Number(el.dataset.id) });
+    _docMsg(`Ripristinata la versione precedente di ${chiave}. I corsisti la vedono dal prossimo 🔄 aggiorna.`);
   }));
 
   // --- Diagnostica ---
