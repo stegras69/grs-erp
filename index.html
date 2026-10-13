@@ -455,6 +455,44 @@ function chiaveDiRecord(key, record) {
   const cc = CAMPO_CHIAVE[key];
   return typeof cc === 'function' ? cc(record) : record[cc];
 }
+// Data di creazione "gg/mm/aaaa hh:mm" → millisecondi (null se assente o illeggibile).
+function _msCreatoIl(s) {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/.exec(String(s || ''));
+  return m ? new Date(+m[3], +m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0)).getTime() : null;
+}
+// Applica le patch (in ordine di tempo) a un elenco di record. Se più record hanno la stessa chiave
+// (es. una distinta creata due volte, o eliminata e poi ricreata con CS01), la patch va al primo record
+// ANCORA VALIDO che esisteva già quando la patch è stata fatta — cioè quello che l'utente vedeva.
+// Prima andava sempre al primo record in assoluto, anche se già eliminato: le modifiche "sparivano"
+// su una copia invisibile (CS02 che non aggiorna la distinta).
+// La regola vale solo per le patch fatte da questa data in poi: quelle precedenti sono state fatte vedendo lo
+// schermo con la regola vecchia, e rileggerle con la nuova cambierebbe dati che oggi tutti vedono in un altro modo
+// (es. eliminazioni ripetute che finirebbero su copie di altri corsisti).
+const PATCH_REGOLA_COPIA_VALIDA_DAL = Date.UTC(2026, 9, 13, 9, 0, 0); // 13/10/2026 11:00 ora italiana
+function applicaPatchAElenco(key, elenco, patches, rec = (x) => x) {
+  const perChiave = new Map();
+  elenco.forEach(x => {
+    const k = chiaveDiRecord(key, rec(x));
+    if (!perChiave.has(k)) perChiave.set(k, []);
+    perChiave.get(k).push(x);
+  });
+  patches.slice().sort((a, b) => (a._t || 0) - (b._t || 0)).forEach(patch => {
+    const stessi = perChiave.get(patch._target);
+    if (!stessi) return;
+    let bersaglio = stessi[0];
+    if (stessi.length > 1 && (patch._t || 0) >= PATCH_REGOLA_COPIA_VALIDA_DAL) {
+      const vivi = stessi.filter(x => !rec(x)._eliminato);
+      const esistenti = vivi.filter(x => { const t = _msCreatoIl(rec(x).creatoIl); return t === null || !patch._t || t <= patch._t; });
+      bersaglio = esistenti[0] || vivi[0] || stessi[0];
+    }
+    const r = rec(bersaglio);
+    if (patch._arrayField && r[patch._arrayField] && r[patch._arrayField][patch._arrayIndex]) {
+      Object.assign(r[patch._arrayField][patch._arrayIndex], patch.campi);
+    } else {
+      Object.assign(r, patch.campi);
+    }
+  });
+}
 
 function corsoKey(key) {
   if (key === 'preferiti' || key === 'corsiRegistrati') return key; // dati globali, non legati a un singolo corso
@@ -761,16 +799,7 @@ async function loadList(key, shared = true) {
   const campoChiave = CAMPO_CHIAVE[key];
   if (campoChiave) {
     const patchLists = await Promise.all(partecipanti.map(p => getRaw(corsoKey(key) + '::patch::' + p.shard, true)));
-    const tuttePatch = patchLists.flat().sort((a,b) => (a._t||0) - (b._t||0));
-    tuttePatch.forEach(patch => {
-      const bersaglio = combinata.find(r => chiaveDiRecord(key, r) === patch._target);
-      if (!bersaglio) return;
-      if (patch._arrayField && bersaglio[patch._arrayField] && bersaglio[patch._arrayField][patch._arrayIndex]) {
-        Object.assign(bersaglio[patch._arrayField][patch._arrayIndex], patch.campi);
-      } else {
-        Object.assign(bersaglio, patch.campi);
-      }
-    });
+    applicaPatchAElenco(key, combinata, patchLists.flat());
     combinata = combinata.filter(r => !r._eliminato);
   }
   return combinata;
@@ -1271,16 +1300,7 @@ async function _elencoConProvenienza(key, corso) {
     for (const fk in mappaPatch) {
       try { tuttePatch = tuttePatch.concat(JSON.parse(mappaPatch[fk]) || []); } catch (e) {}
     }
-    tuttePatch.sort((a, b) => (a._t || 0) - (b._t || 0));
-    tuttePatch.forEach(patch => {
-      const bersaglio = conProvenienza.find(x => chiaveDiRecord(key, x.rec) === patch._target);
-      if (!bersaglio) return;
-      if (patch._arrayField && bersaglio.rec[patch._arrayField] && bersaglio.rec[patch._arrayField][patch._arrayIndex]) {
-        Object.assign(bersaglio.rec[patch._arrayField][patch._arrayIndex], patch.campi);
-      } else {
-        Object.assign(bersaglio.rec, patch.campi);
-      }
-    });
+    applicaPatchAElenco(key, conProvenienza, tuttePatch, x => x.rec);
   }
   return conProvenienza.filter(x => !x.rec._eliminato);
 }
