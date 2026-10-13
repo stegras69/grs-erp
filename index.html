@@ -468,7 +468,7 @@ function _msCreatoIl(s) {
 // La regola vale solo per le patch fatte da questa data in poi: quelle precedenti sono state fatte vedendo lo
 // schermo con la regola vecchia, e rileggerle con la nuova cambierebbe dati che oggi tutti vedono in un altro modo
 // (es. eliminazioni ripetute che finirebbero su copie di altri corsisti).
-const PATCH_REGOLA_COPIA_VALIDA_DAL = Date.UTC(2026, 9, 13, 9, 0, 0); // 13/10/2026 11:00 ora italiana
+const PATCH_REGOLA_COPIA_VALIDA_DAL = Date.UTC(2026, 9, 13, 8, 55, 30); // 13/10/2026 10:55:30 ora italiana (dopo le ultime eliminazioni di LA001 fatte con la regola vecchia)
 function applicaPatchAElenco(key, elenco, patches, rec = (x) => x) {
   const perChiave = new Map();
   elenco.forEach(x => {
