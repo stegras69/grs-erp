@@ -860,6 +860,14 @@ function getGiacenzaLoc(materiale, locazione) {
   });
   return tot;
 }
+// Ubicazioni in anagrafica + quelle che compaiono nei movimenti ma non sono (più) in anagrafica (es. eliminate
+// dopo averci messo merce): senza queste, LS24 non mostrerebbe quella merce mentre MMBE la conta nel totale.
+function ubicazioniConMovimenti() {
+  const note = new Set(locazioni.map(l => l.codice));
+  const extra = new Set();
+  movimentazioni.forEach(m => { [m.locazioneA, m.locazioneDa].forEach(c => { if (c && !note.has(c)) extra.add(c); }); });
+  return locazioni.concat([...extra].sort().map(c => ({ codice: c, descrizione: '⚠ ubicazione non in anagrafica', fantasma: true })));
+}
 function getGiacenza(codice) {
   let tot = 0;
   movimentazioni.forEach(m => {
@@ -5521,8 +5529,9 @@ let ls24Dettaglio = null; // codice materiale attualmente aperto in dettaglio, o
 let sortLS24 = { campo: null, asc: true };
 function renderLS24(el) {
   let righe = [];
+  const ubicazioniLS24 = ubicazioniConMovimenti();
   materiali.forEach(m => {
-    locazioni.forEach(l => {
+    ubicazioniLS24.forEach(l => {
       const q = getGiacenzaLoc(m.codice, l.codice);
       righe.push({ materiale: m.codice, descrizione: m.descrizione, tipo: m.tipo, um: m.um, locazione: l.codice, locDescrizione: l.descrizione, quantita: q });
     });
@@ -5556,7 +5565,7 @@ function renderLS24(el) {
   const matDettaglio = ls24Dettaglio ? materiali.find(m => m.codice === ls24Dettaglio) : null;
   let dettaglioHTML = '';
   if (matDettaglio) {
-    const perLoc = locazioni.map(l => ({ codice: l.codice, descrizione: l.descrizione, q: getGiacenzaLoc(matDettaglio.codice, l.codice) })).filter(x => x.q !== 0);
+    const perLoc = ubicazioniLS24.map(l => ({ codice: l.codice, descrizione: l.descrizione, q: getGiacenzaLoc(matDettaglio.codice, l.codice) })).filter(x => x.q !== 0);
     const totale = getGiacenza(matDettaglio.codice);
     const inArrivoAcquisti = ordinatoApertoPer(matDettaglio.codice);
     const inArrivoProduzione = matDettaglio.tipo === 'PF' ? pianificatoApertoPer(matDettaglio.codice) : 0;
@@ -5589,7 +5598,7 @@ function renderLS24(el) {
         <label>Ubicazione</label>
         <select id="f-ls24-locazione">
           <option value="">-- tutte --</option>
-          ${locazioni.map(l => `<option value="${l.codice}" ${filtroLS24.locazione===l.codice?'selected':''}>${l.codice} - ${l.descrizione}</option>`).join('')}
+          ${ubicazioniLS24.map(l => `<option value="${l.codice}" ${filtroLS24.locazione===l.codice?'selected':''}>${l.codice} - ${l.descrizione}</option>`).join('')}
         </select>
         <label>Mostra</label>
         <select id="f-ls24-solocongiacenza">
@@ -5810,7 +5819,7 @@ function renderMovimentoMateriale(el, trans) {
   d.righe.forEach((r, i) => {
     collegaF4('mb-mat-' + i, 'Cerca materiale', materiali.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), v => { r.materiale = v; renderScreenContent(); });
     if (def.mat2) collegaF4('mb-mat2-' + i, 'Cerca materiale di destinazione', materiali.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), v => { r.materiale2 = v; renderScreenContent(); });
-    if (def.da) collegaF4('mb-da-' + i, 'Cerca ubicazione di prelievo', locazioni.map(l => ({ value: l.codice, label: `${l.codice} - ${l.descrizione}${r.materiale ? ` (disp. ${getGiacenzaLoc(r.materiale, l.codice)})` : ''}` })), v => { r.locDa = v; renderScreenContent(); });
+    if (def.da) collegaF4('mb-da-' + i, 'Cerca ubicazione di prelievo', ubicazioniConMovimenti().map(l => ({ value: l.codice, label: `${l.codice} - ${l.descrizione}${r.materiale ? ` (disp. ${getGiacenzaLoc(r.materiale, l.codice)})` : ''}` })), v => { r.locDa = v; renderScreenContent(); });
     if (def.a) collegaF4('mb-a-' + i, 'Cerca ubicazione di ricezione', locazioni.map(l => ({ value: l.codice, label: `${l.codice} - ${l.descrizione}` })), v => { r.locA = v; renderScreenContent(); });
     const q = document.getElementById('mb-qta-' + i); if (q) q.addEventListener('input', e => { r.qta = e.target.value; });
     if (q) q.addEventListener('change', () => renderScreenContent());
