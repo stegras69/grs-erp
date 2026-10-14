@@ -622,8 +622,8 @@ function avviaPresenzaDispositivo() {
 // può far perdere dati (uno dei due riscrive il cassetto senza i record dell'altro). Ogni nome ha quindi un
 // "blocco" corso_X::sessione::<nome> che indica quale dispositivo/scheda lo sta usando. Un altro dispositivo
 // resta fermo finché il formatore non sblocca il nome dal Pannello docente (o il primo esce con "Esci",
-// o resta inattivo per più di SESSIONE_SCADE_MS). Una seconda scheda dello stesso browser può invece
-// subentrare (è la stessa persona): l'altra scheda si blocca da sola. I dispositivi del formatore sono esenti.
+// o resta inattivo per più di SESSIONE_SCADE_MS). Più schede dello stesso browser lavorano insieme senza
+// problemi (stesso dispositivo; ogni salvataggio rilegge il cassetto dal server). I dispositivi del formatore sono esenti.
 const SESSIONE_SCADE_MS = 15 * 60 * 1000;
 let _nomeAcquisito = false;
 let _sessioneBloccata = false;
@@ -646,21 +646,20 @@ async function _scriviBloccoNome() {
   await remoteStorage.set(_chiaveBloccoNome(), JSON.stringify({ dispositivo: getDeviceId(), scheda: _idScheda(), utente: currentUser,
     browser: _descriviBrowser(), ultimoAccesso: nowStr(), ts: Date.now() }));
 }
-function _bloccoMio(b) { return b && !b.libero && b.dispositivo === getDeviceId() && b.scheda === _idScheda(); }
+function _bloccoMio(b) { return b && !b.libero && b.dispositivo === getDeviceId(); }
 function _bloccoAttivo(b) { return b && !b.libero && (Date.now() - (Number(b.ts) || 0)) < SESSIONE_SCADE_MS; }
 async function _esenteDaBloccoNome() {
   if (_esenteBloccoNome === null) _esenteBloccoNome = !STORAGE_CONFIGURATO || await dispositivoFidato();
   return _esenteBloccoNome;
 }
 // All'accesso: prende il nome se è libero (o già suo, o scaduto). Ritorna true se si può proseguire.
-async function acquisisciNome(subentraScheda) {
+async function acquisisciNome() {
   _sessioneBloccata = false;
   if (await _esenteDaBloccoNome()) { _nomeAcquisito = false; return true; }
   let b = null;
   try { b = await _leggiBloccoNome(); } catch (e) { return true; } // rete assente: non si blocca il lavoro
-  const stessoDispositivo = b && b.dispositivo === getDeviceId();
-  if (!_bloccoMio(b) && _bloccoAttivo(b) && !(stessoDispositivo && subentraScheda)) {
-    renderNomeInUso(b, stessoDispositivo ? 'scheda' : 'dispositivo');
+  if (!_bloccoMio(b) && _bloccoAttivo(b)) {
+    renderNomeInUso(b, 'dispositivo');
     return false;
   }
   try { await _scriviBloccoNome(); } catch (e) {}
@@ -676,24 +675,23 @@ async function verificaNomeAncoraMio() {
   let b;
   try { b = await _leggiBloccoNome(); } catch (e) { return true; }
   if (_bloccoMio(b)) return true;
-  if (!b) { try { await _scriviBloccoNome(); } catch (e) {} return true; } // blocco mai scritto/rimosso: lo riprendo
+  // Blocco mai scritto/rimosso, oppure liberato con "Esci" da un'altra scheda di questo stesso browser: lo riprendo.
+  if (!b || (b.libero && b.da === 'uscita' && b.dispositivo === getDeviceId())) { try { await _scriviBloccoNome(); } catch (e) {} return true; }
   _sessioneBloccata = true; _nomeAcquisito = false;
   if (_timerPresenza) { clearInterval(_timerPresenza); _timerPresenza = null; }
-  renderNomeInUso(b, b.libero ? 'liberato' : (b.dispositivo === getDeviceId() ? 'sostituitoScheda' : 'sostituito'));
+  renderNomeInUso(b, b.libero ? 'liberato' : 'sostituito');
   return false;
 }
 async function rilasciaNome() {
   if (!_nomeAcquisito) return;
   _nomeAcquisito = false;
-  try { const b = await _leggiBloccoNome(); if (_bloccoMio(b)) await remoteStorage.set(_chiaveBloccoNome(), JSON.stringify({ libero: true, ultimoAccesso: nowStr(), ts: Date.now(), da: 'uscita' })); } catch (e) {}
+  try { const b = await _leggiBloccoNome(); if (_bloccoMio(b)) await remoteStorage.set(_chiaveBloccoNome(), JSON.stringify({ libero: true, ultimoAccesso: nowStr(), ts: Date.now(), da: 'uscita', dispositivo: getDeviceId() })); } catch (e) {}
 }
 function renderNomeInUso(b, motivo) {
   const quando = b && b.ts ? (() => { const m = Math.round((Date.now() - b.ts) / 60000); return m < 1 ? 'adesso' : m + ' min fa'; })() : '';
   const testi = {
     dispositivo: `Il nome <strong>${_h(currentUser)}</strong> è già in uso nel corso ${_h(currentCorso)} su un altro dispositivo (${_h(b.browser || '?')}, ultimo segnale ${quando}).`,
-    scheda: `Il programma con il nome <strong>${_h(currentUser)}</strong> è già aperto in un'altra scheda di questo browser.`,
     sostituito: `Il nome <strong>${_h(currentUser)}</strong> ora è in uso su un altro dispositivo (${_h(b.browser || '?')}). Questa sessione è stata fermata per non perdere dati.`,
-    sostituitoScheda: `Il nome <strong>${_h(currentUser)}</strong> ora è in uso in un'altra scheda di questo browser. Questa scheda è stata fermata per non perdere dati.`,
     liberato: `Il formatore ha sbloccato il nome <strong>${_h(currentUser)}</strong> per farlo usare su un altro dispositivo. Questa sessione è stata fermata.`,
   };
   document.getElementById('app').innerHTML = `
@@ -701,17 +699,13 @@ function renderNomeInUso(b, motivo) {
       <h2 style="margin:0 0 8px 0; color:#a83232;">⛔ Nome già in uso</h2>
       <p>${testi[motivo] || testi.dispositivo}</p>
       <p style="font-size:11px; color:#5a6470;">Per evitare di perdere dati, ogni nome può lavorare su un solo dispositivo alla volta.</p>
-      ${motivo === 'scheda' ? `<p style="font-size:11px;">Chiudi l'altra scheda, oppure continua qui: l'altra scheda verrà fermata.</p>
-        <button id="nu-subentra">Continua in questa scheda</button>` :
-        `<p style="font-size:11px;">Se l'altro dispositivo è il tuo, chiudi lì il programma con <strong>Esci</strong> e premi Riprova. Altrimenti chiedi al formatore di <strong>sbloccare il nome</strong>.</p>
-        <button id="nu-riprova">Riprova</button>`}
+      <p style="font-size:11px;">Se l'altro dispositivo è il tuo, chiudi lì il programma con <strong>Esci</strong> e premi Riprova. Altrimenti chiedi al formatore di <strong>sbloccare il nome</strong>.</p>
+      <button id="nu-riprova">Riprova</button>
       <div class="login-note"><span id="nu-cambia" style="text-decoration:underline; cursor:pointer;">Entra con un altro nome</span></div>
     </div></div>`;
-  if (motivo !== 'scheda') registraPresenzaDispositivo(true, true);
+  registraPresenzaDispositivo(true, true);
   const riprova = document.getElementById('nu-riprova');
-  if (riprova) riprova.addEventListener('click', async () => { riprova.disabled = true; riprova.textContent = 'Verifica…'; if (await acquisisciNome(false)) boot(true); });
-  const sub = document.getElementById('nu-subentra');
-  if (sub) sub.addEventListener('click', async () => { if (await acquisisciNome(true)) boot(true); });
+  riprova.addEventListener('click', async () => { riprova.disabled = true; riprova.textContent = 'Verifica…'; if (await acquisisciNome()) boot(true); });
   document.getElementById('nu-cambia').addEventListener('click', () => { _sessioneBloccata = false; currentUser = null; _cancellaSessioneDispositivo(); renderLogin(); });
 }
 // ---- DISPOSITIVI FIDATI: un dispositivo diventa "fidato" automaticamente la prima volta
@@ -7125,7 +7119,7 @@ function normalizzaOrdiniVendita(list) {
 }
 
 async function boot(nomeGiaVerificato) {
-  if (!nomeGiaVerificato && !(await acquisisciNome(false))) return;
+  if (!nomeGiaVerificato && !(await acquisisciNome())) return;
   await caricaCacheCorso(); // un solo viaggio di rete per tutti i dati di questo corso
   await migraVecchioFormatoSeNecessario();
 
