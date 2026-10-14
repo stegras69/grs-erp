@@ -480,10 +480,13 @@ function applicaPatchAElenco(key, elenco, patches, rec = (x) => x) {
     const stessi = perChiave.get(patch._target);
     if (!stessi) return;
     let bersaglio = stessi[0];
-    if (stessi.length > 1 && (patch._t || 0) >= PATCH_REGOLA_COPIA_VALIDA_DAL) {
-      const vivi = stessi.filter(x => !rec(x)._eliminato);
-      const esistenti = vivi.filter(x => { const t = _msCreatoIl(rec(x).creatoIl); return t === null || !patch._t || t <= patch._t; });
-      bersaglio = esistenti[0] || vivi[0] || stessi[0];
+    if ((patch._t || 0) >= PATCH_REGOLA_COPIA_VALIDA_DAL) {
+      // Solo record che esistevano già quando la patch è stata fatta (15 minuti di tolleranza per orologi
+      // dei dispositivi non allineati): un'eliminazione vecchia non deve colpire un record ricreato dopo con lo
+      // stesso codice. Tra questi si preferisce quello ancora valido; se non ce n'è nessuno la patch si ignora.
+      const esistenti = stessi.filter(x => { const t = _msCreatoIl(rec(x).creatoIl); return t === null || t <= patch._t + 15 * 60000; });
+      bersaglio = esistenti.find(x => !rec(x)._eliminato) || esistenti[0];
+      if (!bersaglio) return;
     }
     const r = rec(bersaglio);
     if (patch._arrayField && r[patch._arrayField] && r[patch._arrayField][patch._arrayIndex]) {
