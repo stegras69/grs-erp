@@ -60,6 +60,14 @@ precedenti), Diagnostica.
 - MI01/MI04/MI07 (inventario fisico SAP) al posto delle sole rettifiche 701/702.
 - Controllo al salvataggio dei movimenti verso ubicazioni eliminate.
 - Opzionali: quantità modificabile in ME21N, backup automatico periodico.
+- **Esercitazione guidata** (tipo SAP Enable Now / Fiori guided tours), proposta del 15/10, da riprendere: overlay che
+  scurisce lo schermo e illumina con freccia e fumetto la voce di menu e poi campo per campo; il passo avanza solo quando
+  l'azione è fatta davvero. Un unico percorso a passi numerati con mappa del progresso, riprendibile:
+  1 VA01 · 2 MF50/CO01 · 3 MD02/MD01 (+MD04) · 4 ME21N · 5 MIGO (→RICEZIONE) · 6 ZMR01+MB1B 311 (→OFFICINA) ·
+  7 CO15 · 8 MB1B 311 (OFFICINA→SPEDIZIONE) · 9 VL01N · 10 controllo MB51/MMBE/COOIS.
+  Da decidere: prodotto (consigliato: un prodotto "da esercizio" identico per ciascuno), dati imposti (consigliato),
+  guida rigida o morbida, attivazione per corso (consigliato: solo PISTOIALOG), progresso visibile nel Pannello docente.
+  Primo prototipo previsto: motore + passi 1–2.
 
 ## Esercitazione in corso (PRATOMAG, dal 15/10/2026)
 Ordini OV-0065…OV-0075 inseriti da SG con riferimento "ESERCIZIO 15/10 – <corsista>" (Davide, FLINT, modou, Tayeba):
