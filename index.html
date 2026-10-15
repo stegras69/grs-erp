@@ -7160,11 +7160,25 @@ function render() { renderMain(); }
 function render() { renderMain(); }
 
 // ============ CANCELLO D'ACCESSO AL SITO ============
-// Password unica condivisa con i corsisti: richiesta ad OGNI accesso al programma
-// (nessuna memorizzazione tra un accesso e l'altro). Cambiala qui per cambiare la password.
+// Password unica condivisa con i corsisti. Dopo averla inserita, QUESTO browser la ricorda per ACCESSO_SITO_ORE ore
+// (così aprire il programma in una nuova scheda non riporta alla richiesta della password); poi, o se la password
+// cambia, viene richiesta di nuovo. Cambiala qui per cambiare la password.
 const SITE_ACCESS_PASSWORD = 'grs2026';
 
+const ACCESSO_SITO_ORE = 12;
+const CHIAVE_ACCESSO_SITO = '__accesso_sito__';
+function _impronta(testo) { let h = 5381; for (let i = 0; i < testo.length; i++) h = ((h << 5) + h + testo.charCodeAt(i)) | 0; return String(h >>> 0); }
+function _accessoSitoValido() {
+  try {
+    const v = JSON.parse(localStorage.getItem(CHIAVE_ACCESSO_SITO) || 'null');
+    return !!(v && v.h === _impronta(SITE_ACCESS_PASSWORD) && Date.now() < v.scade);
+  } catch (e) { return false; }
+}
+function _ricordaAccessoSito() {
+  try { localStorage.setItem(CHIAVE_ACCESSO_SITO, JSON.stringify({ h: _impronta(SITE_ACCESS_PASSWORD), scade: Date.now() + ACCESSO_SITO_ORE * 3600000 })); } catch (e) {}
+}
 function renderAccessGate(onOk) {
+  if (_accessoSitoValido()) { onOk(); return; }
   document.getElementById('app').innerHTML = `
     <div class="login-overlay"><div class="login-box">
       <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
@@ -7181,6 +7195,7 @@ function renderAccessGate(onOk) {
   const err = document.getElementById('access-pw-err');
   const tentaAccesso = () => {
     if (input.value === SITE_ACCESS_PASSWORD) {
+      _ricordaAccessoSito();
       onOk();
     } else {
       err.style.display = 'block';
