@@ -685,7 +685,14 @@ async function verificaNomeAncoraMio() {
 async function rilasciaNome() {
   if (!_nomeAcquisito) return;
   _nomeAcquisito = false;
-  try { const b = await _leggiBloccoNome(); if (_bloccoMio(b)) await remoteStorage.set(_chiaveBloccoNome(), JSON.stringify({ libero: true, ultimoAccesso: nowStr(), ts: Date.now(), da: 'uscita', dispositivo: getDeviceId() })); } catch (e) {}
+  // La chiave va calcolata SUBITO: chi chiama (Esci) azzera currentUser senza aspettare, e dopo la prima
+  // attesa di rete la chiave risulterebbe quella di "anon" invece di quella del corsista.
+  const chiave = _chiaveBloccoNome();
+  try {
+    const r = await remoteStorage.get(chiave);
+    const b = r ? JSON.parse(r.value) : null;
+    if (_bloccoMio(b)) await remoteStorage.set(chiave, JSON.stringify({ libero: true, ultimoAccesso: nowStr(), ts: Date.now(), da: 'uscita', dispositivo: getDeviceId() }));
+  } catch (e) {}
 }
 function renderNomeInUso(b, motivo) {
   const quando = b && b.ts ? (() => { const m = Math.round((Date.now() - b.ts) / 60000); return m < 1 ? 'adesso' : m + ' min fa'; })() : '';
