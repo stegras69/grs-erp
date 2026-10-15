@@ -63,6 +63,9 @@ Accesso dal login con due PIN. Schede: Corsi (crea, duplica, backup, elimina, gi
 precedenti), Diagnostica.
 
 ## Questioni aperte (decide Stefano)
+- **PRATOMAG, SU022 (Tayeba):** il 14/10 un MB1B 311 da una scheda con dati vecchi ha spostato 17.900 pz da OFFICINA
+  a 1A1 con solo 500 presenti (OFFICINA a -17.400, poi ricoperta). Il totale è giusto ma 1A1 mostra 17.900 pz non reali:
+  correzione MB1B 311 di 17.400 da 1A1 a OFFICINA, (a) da Tayeba o (b) da SG. Il difetto del programma è corretto dal 15/10.
 - MIGO: tenere o togliere la ricezione riga per riga oltre a "Ricevi DDT completo".
 - Elenco ordini di vendita tipo VA05 (oggi l'elenco è sotto VA01).
 - MI01/MI04/MI07 (inventario fisico SAP) al posto delle sole rettifiche 701/702.
