@@ -644,6 +644,7 @@ async function registraPresenzaDispositivo(forza, inAttesa) {
   try {
     const rec = { corso: currentCorso, utente: currentUser, ultimoAccesso: nowStr(), ts: Date.now(), browser: _descriviBrowser() };
     if (inAttesa) rec.inAttesa = true; // bloccato perché il nome è già in uso altrove: il formatore lo vede nel pannello
+    if (_ultimoMsgLetto) rec.lettoMsg = _ultimoMsgLetto; // conferma di lettura per il Pannello docente
     await remoteStorage.set('dispositiviAttivi::' + getDeviceId(), JSON.stringify(rec));
     if (!inAttesa && _nomeAcquisito) await _scriviBloccoNome();
   } catch (e) { /* non grave: la presenza è solo informativa */ }
@@ -655,8 +656,51 @@ async function _controlloPeriodico() {
   if (!(await verificaNomeAncoraMio())) return;
   registraPresenzaDispositivo(true);
 }
+// ---- MESSAGGI DAL FORMATORE: come in SAP la funzione TH_POPUP (popup sullo schermo di un singolo utente) e la
+// transazione SM02 (messaggio di sistema per tutti). Li scrive solo il formatore dal Pannello docente: chiavi
+// "messaggi::<dispositivo>" e "messaggiCorso::<corso>", che i corsisti possono leggere ma non scrivere. Ogni messaggio
+// ha un id: il dispositivo lo mostra una volta sola e ricorda quelli già letti.
+const MESSAGGI_OGNI_MS = 30000;
+let _timerMessaggi = null;
+let _ultimoMsgLetto = null;
+function _msgLetti() { try { return JSON.parse(localStorage.getItem('__messaggi_letti__') || '[]'); } catch (e) { return []; } }
+function _segnaMsgLetto(id) {
+  try { const l = _msgLetti().filter(x => x !== id); l.push(id); localStorage.setItem('__messaggi_letti__', JSON.stringify(l.slice(-50))); } catch (e) {}
+}
+async function controllaMessaggi() {
+  if (!STORAGE_CONFIGURATO || !currentUser || !currentCorso || _inPannelloDocente || _sessioneBloccata) return;
+  if (document.visibilityState !== 'visible' || document.getElementById('msg-docente')) return;
+  const chiavi = ['messaggi::' + getDeviceId(), 'messaggiCorso::' + currentCorso];
+  const mappa = {};
+  try {
+    if (remoteStorage.getChiavi) Object.assign(mappa, await remoteStorage.getChiavi(chiavi));
+    else for (const k of chiavi) { const r = await remoteStorage.get(k); if (r) mappa[k] = r.value; }
+  } catch (e) { return; }
+  const letti = _msgLetti();
+  for (const k of chiavi) {
+    let m = null; try { m = JSON.parse(mappa[k] || 'null'); } catch (e) {}
+    if (m && m.id && m.testo && !letti.includes(m.id) && (!m.scade || Date.now() < m.scade)) { mostraMessaggioDocente(m); return; }
+  }
+}
+function mostraMessaggioDocente(m) {
+  const grande = m.stile === 'grande';
+  const div = document.createElement('div');
+  div.id = 'msg-docente';
+  div.style.cssText = 'position:fixed; inset:0; z-index:100000; display:flex; align-items:center; justify-content:center; background:rgba(0,30,60,' + (grande ? '0.85' : '0.45') + '); padding:16px;';
+  div.innerHTML = `
+    <div style="background:#ece9d8; border:2px solid #7f9db9; box-shadow:0 10px 30px rgba(0,0,0,.4); max-width:${grande ? '900px' : '440px'}; width:100%; padding:${grande ? '36px' : '18px 20px'}; text-align:center;">
+      <div style="font-size:12px; font-weight:700; color:#2e5aa8; margin-bottom:10px;">${m.firma ? '✉ Messaggio dal formatore' : '✉ Messaggio di sistema'}</div>
+      <div style="font-size:${grande ? '34px' : '15px'}; font-weight:${grande ? '700' : '400'}; line-height:1.35; color:#1a1a1a; white-space:pre-wrap; word-wrap:break-word;">${_h(m.testo)}</div>
+      <button id="msg-docente-ok" style="margin-top:18px; padding:8px 28px; font-size:13px; font-weight:600; background:#2e5aa8; color:white; border:1px solid #1f3a5f; cursor:pointer;">OK</button>
+    </div>`;
+  document.body.appendChild(div);
+  document.getElementById('msg-docente-ok').addEventListener('click', () => {
+    div.remove(); _segnaMsgLetto(m.id); _ultimoMsgLetto = m.id; registraPresenzaDispositivo(true);
+  });
+}
 function avviaPresenzaDispositivo() {
   registraPresenzaDispositivo(true);
+  if (!_timerMessaggi) { _timerMessaggi = setInterval(controllaMessaggi, MESSAGGI_OGNI_MS); setTimeout(controllaMessaggi, 3000); }
   if (_timerPresenza) return;
   _timerPresenza = setInterval(_controlloPeriodico, PRESENZA_OGNI_MS);
   // Quando si torna su una scheda rimasta in secondo piano si controlla subito (senza aspettare il prossimo giro)
@@ -1788,7 +1832,13 @@ async function _datiSchedaDispositivi() {
     const m = await remoteStorage.getPrefix('corso_' + c.codice + '::sessione::');
     Object.keys(m).forEach(k => { let v = {}; try { v = JSON.parse(m[k]) || {}; } catch (e) {} nomiInUso.push({ chiave: k, corso: c.codice, shard: k.split('::').pop(), ...v }); });
   });
-  return { presenze, bannati, fidati, corsi, nomiInUso };
+  const mm = await remoteStorage.getPrefix('messaggi::');
+  const messaggi = {};
+  Object.keys(mm).forEach(k => { try { messaggi[k.slice('messaggi::'.length)] = JSON.parse(mm[k]); } catch (e) {} });
+  const mc = await remoteStorage.getPrefix('messaggiCorso::');
+  const messaggiCorso = Object.keys(mc).map(k => { let v = {}; try { v = JSON.parse(mc[k]) || {}; } catch (e) {} return { corso: k.slice('messaggiCorso::'.length), ...v }; })
+    .filter(m => !m.scade || Date.now() < m.scade);
+  return { presenze, bannati, fidati, corsi, nomiInUso, messaggi, messaggiCorso };
 }
 
 // ---- Render ----
@@ -1889,7 +1939,17 @@ function _htmlCorsi({ corsiRegistrati, stat, impostazioni, nonRegistrati }) {
 }
 
 function _shardDi(nome) { return (nome || 'anon').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-'); }
-function _htmlDispositivi({ presenze, bannati, fidati, corsi, nomiInUso }) {
+function _moduloMessaggio(idx) {
+  return `<div class="doc-conferma blu">
+    <textarea id="doc-msg-testo-${idx}" rows="3" maxlength="300" placeholder="Testo del messaggio (max 300 caratteri)" style="width:100%; box-sizing:border-box; padding:6px; font-family:inherit; font-size:12px; border:1px solid #7f9db9;"></textarea>
+    <div class="doc-riga">
+      <select id="doc-msg-stile-${idx}"><option value="normale">Finestra normale</option><option value="grande">Grande, a tutto schermo</option></select>
+      <label style="font-size:11px;"><input type="checkbox" id="doc-msg-firma-${idx}" checked> firma "dal formatore" (altrimenti "messaggio di sistema")</label>
+    </div>
+    <button class="doc-btn doc-msg-invia" data-idx="${idx}">✉ Invia</button> <button id="doc-annulla" class="doc-btn grigio">Annulla</button>
+  </div>`;
+}
+function _htmlDispositivi({ presenze, bannati, fidati, corsi, nomiInUso, messaggi, messaggiCorso }) {
   const attivi = nomiInUso.filter(n => !n.libero && Date.now() - (Number(n.ts) || 0) < SESSIONE_SCADE_MS && (!doc.filtroDispositivi || n.corso === doc.filtroDispositivi));
   const inAttesa = presenze.filter(p => p.inAttesa && Date.now() - p.ts < SESSIONE_SCADE_MS);
   const cardNomi = `
@@ -1912,7 +1972,15 @@ function _htmlDispositivi({ presenze, bannati, fidati, corsi, nomiInUso }) {
   const filtrate = doc.filtroDispositivi ? presenze.filter(p => p.corso === doc.filtroDispositivi) : presenze;
   const stato = (ts) => { const d = Date.now() - ts; return d < 15 * 60000 ? '<span class="doc-pill verde">collegato</span>' : d < 86400000 ? '<span class="doc-pill giallo">oggi</span>' : '<span class="doc-pill grigio">inattivo</span>'; };
   const tag = (id) => (presenze.find(p => p.id === id && p.inAttesa && Date.now() - p.ts < SESSIONE_SCADE_MS) ? ' <span class="doc-pill rosso">nome già in uso</span>' : '') + (id === mio ? ' <span class="doc-pill blu">questo</span>' : '') + (idFidati.has(id) ? ' <span class="doc-pill blu">formatore</span>' : '') + (idBannati.has(id) ? ' <span class="doc-pill rosso">bloccato</span>' : '');
-  return cardNomi + `
+  const cardMsgCorso = `
+    <div class="doc-card">
+      <h3>📢 Messaggio a tutto il corso (come SAP SM02)</h3>
+      <p class="doc-sub">Compare entro 30 secondi a tutti i collegati del corso scelto (e a chi entra nelle 2 ore successive). Per un singolo corsista usa "✉ messaggio" nella tabella qui sotto (come SAP TH_POPUP).</p>
+      ${messaggiCorso.length ? messaggiCorso.map(m => `<p style="font-size:11px; margin:2px 0;">Attivo in <strong>${_h(m.corso)}</strong> dalle ${_h(m.inviato || '')}: "${_h(m.testo)}" <span class="print-btn doc-msg-ritira" data-chiave="${_h('messaggiCorso::' + m.corso)}" style="color:#a83232;">ritira</span></p>`).join('') : ''}
+      ${doc.msgCorsoAperto ? `<div class="doc-riga"><select id="doc-msg-corso">${corsi.map(c => `<option value="${_h(c.codice)}" ${(doc.filtroDispositivi || '') === c.codice ? 'selected' : ''}>${_h(c.codice)}</option>`).join('')}</select></div>${_moduloMessaggio('corso')}`
+        : `<button id="doc-msg-corso-apri" class="doc-btn">📢 Scrivi un messaggio al corso</button>`}
+    </div>`;
+  return cardNomi + cardMsgCorso + `
     <div class="doc-card">
       <h3>Dispositivi che hanno usato il programma (${presenze.length})</h3>
       <p class="doc-sub">Ogni dispositivo collegato a un corso si segnala ogni 3 minuti. Bloccandolo, entro pochi minuti il programma su quel dispositivo si chiude con "Accesso non consentito" (il blocco è per dispositivo, non per rete: gli altri dell'aula non sono toccati).</p>
@@ -1923,7 +1991,9 @@ function _htmlDispositivi({ presenze, bannati, fidati, corsi, nomiInUso }) {
         ${filtrate.map(p => `<tr>
           <td>${stato(p.ts)}</td><td>${_h(p.corso || '—')}</td><td><strong>${_h(p.utente || '—')}</strong></td><td>${_h(p.browser || '—')}</td>
           <td>${_fmtTempo(p.ts)}</td><td class="doc-sub">${_h(p.id.slice(0, 22))}${tag(p.id)}</td>
-          <td>${p.id === mio || idBannati.has(p.id) ? '' : `<span class="print-btn doc-banna" data-id="${_h(p.id)}" style="color:#a83232;">⛔ blocca</span>`}</td></tr>
+          <td class="doc-azioni"><span class="print-btn doc-msg-apri" data-id="${_h(p.id)}">✉ messaggio</span>${p.id === mio || idBannati.has(p.id) ? '' : `<span class="print-btn doc-banna" data-id="${_h(p.id)}" style="color:#a83232;">⛔ blocca</span>`}
+            ${messaggi[p.id] ? `<div class="doc-sub">✉ ${_h(messaggi[p.id].inviato || '')}: ${p.lettoMsg === messaggi[p.id].id ? '<span style="color:#1a6b2e;">letto ✓</span>' : 'non ancora letto'}</div>` : ''}</td></tr>
+          ${doc.msgId === p.id ? `<tr class="doc-dettaglio"><td colspan="7"><p style="margin:0 0 4px 0;">Messaggio sullo schermo di <strong>${_h(p.utente || '—')}</strong> (${_h(p.browser || '')}):</p>${_moduloMessaggio('disp')}</td></tr>` : ''}
           ${doc.bannaId === p.id ? `<tr class="doc-dettaglio"><td colspan="7"><div class="doc-conferma">
             <p>Bloccare il dispositivo di <strong>${_h(p.utente || '—')}</strong> (${_h(p.browser || '')})?</p>
             <input type="text" id="doc-banna-motivo" placeholder="Motivo (facoltativo, visibile solo a te)" autocomplete="off">
@@ -2127,7 +2197,7 @@ function _collegaPannelloDocente() {
     doc.tab = el.dataset.tab; doc.msg = ''; doc.azioneCorso = null; doc.bannaId = null; renderPannelloDocente();
   }));
   su('doc-ricarica', 'click', () => { doc.msg = ''; doc.partecipantiAperti = {}; renderPannelloDocente(); });
-  su('doc-annulla', 'click', () => { doc.azioneCorso = null; doc.bannaId = null; renderPannelloDocente(); });
+  su('doc-annulla', 'click', () => { doc.azioneCorso = null; doc.bannaId = null; doc.msgId = null; doc.msgCorsoAperto = false; renderPannelloDocente(); });
 
   // --- Corsi ---
   su('doc-nuovo-corso', 'input', e => { doc.nuovoCorso = e.target.value; });
@@ -2182,7 +2252,26 @@ function _collegaPannelloDocente() {
 
   // --- Dispositivi ---
   su('doc-filtro-disp', 'change', e => { doc.filtroDispositivi = e.target.value; renderPannelloDocente(); });
-  tutti('.doc-banna', el => { doc.bannaId = el.dataset.id; renderPannelloDocente(); });
+  tutti('.doc-banna', el => { doc.bannaId = el.dataset.id; doc.msgId = null; renderPannelloDocente(); });
+  tutti('.doc-msg-apri', el => { doc.msgId = el.dataset.id; doc.bannaId = null; renderPannelloDocente(); });
+  su('doc-msg-corso-apri', 'click', () => { doc.msgCorsoAperto = true; renderPannelloDocente(); });
+  tutti('.doc-msg-invia', el => _docEsegui(async () => {
+    const idx = el.dataset.idx;
+    const testo = ($('doc-msg-testo-' + idx).value || '').trim();
+    if (!testo) { _docMsg('Scrivi il testo del messaggio.', true); return; }
+    const m = { id: 'm' + Date.now().toString(36), testo: testo.slice(0, 300), stile: $('doc-msg-stile-' + idx).value, firma: $('doc-msg-firma-' + idx).checked, inviato: nowStr() };
+    if (idx === 'corso') {
+      const corso = $('doc-msg-corso').value;
+      await remoteStorage.set('messaggiCorso::' + corso, JSON.stringify({ ...m, scade: Date.now() + 2 * 3600000 }));
+      doc.msgCorsoAperto = false;
+      _docMsg(`Messaggio inviato a tutto il corso ${corso}: compare entro 30 secondi.`);
+    } else {
+      await remoteStorage.set('messaggi::' + doc.msgId, JSON.stringify({ ...m, scade: Date.now() + 24 * 3600000 }));
+      doc.msgId = null;
+      _docMsg('Messaggio inviato: compare entro 30 secondi sullo schermo del corsista (se ha il programma aperto e ha ricaricato la versione nuova).');
+    }
+  }));
+  tutti('.doc-msg-ritira', el => _docEsegui(async () => { await remoteStorage.delete(el.dataset.chiave); _docMsg('Messaggio ritirato.'); }));
   su('doc-banna-ok', 'click', () => _docEsegui(async () => {
     await bannaDispositivo(doc.bannaId, ($('doc-banna-motivo').value || '').trim() || 'bloccato dal formatore');
     doc.bannaId = null;
