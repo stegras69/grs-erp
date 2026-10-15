@@ -32,7 +32,15 @@ Tabella `public.storage(key text PK, value text, updated_at)`.
   `corso_X::impostazioni`, `corso_X::sessione::<shard>` (blocco "un nome, un dispositivo").
 - Globali: `corsiRegistrati::<corso>`, `dispositiviFidati::<id>`, `dispositiviBannati::<id>`, `dispositiviAttivi::<id>`.
 - Lettura `loadList` (unisce cassetti + applica patch con `applicaPatchAElenco`), cache di sessione `_cacheCorso`.
-- Scrittura `aggiungiRecord` / `applicaPatch`: rilettura dal server prima di scrivere, 3 tentativi, errore visibile se fallisce.
+  Al login si scarica il corso intero; 🔄 e i controlli usano l'aggiornamento **incrementale** (`aggiornaCacheIncrementale`:
+  elenco chiavi + `updated_at`, si riscaricano solo le chiavi cambiate).
+- Scrittura `aggiungiRecord` / `applicaPatch`: su Supabase via RPC **`aggiungi_record(p_chiave, p_record)`** (security
+  invoker, rispetta RLS): il server aggiunge il record in coda al cassetto, si invia solo il record nuovo. Ripiego sul
+  metodo classico (rilettura + riscrittura) se la RPC non c'è. Errore visibile se il salvataggio fallisce.
+- I **controlli di disponibilità** (CO15, COGI, MIGO, MB1A/B/C, MBST, VL01N) usano `movimentiFreschi()` (movimenti di
+  tutti aggiornati dal server), mai solo la copia in memoria della scheda.
+- Giacenze calcolate con un indice (`_indiceGiacenze`) ricostruito solo quando cambiano i movimenti; MB51 mostra 500
+  righe alla volta.
 
 ## Comportamenti consolidati (non cambiare senza discuterne)
 - **Patch su record duplicati** (stessa chiave): dal 13/10/2026 10:55:30 (`PATCH_REGOLA_COPIA_VALIDA_DAL`) la patch va

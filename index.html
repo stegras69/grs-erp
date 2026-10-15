@@ -300,6 +300,9 @@ async function _sbVerifica(res, azione, key) {
     throw new Error(`Supabase ha rifiutato la ${azione} su "${key}": HTTP ${res.status}${corpo ? ' — ' + corpo.slice(0, 200) : ''}`);
   }
 }
+// Data di ultima modifica nota per ogni chiave (ms), per scaricare di nuovo solo ciò che è cambiato.
+const _aggChiave = {};
+function _msAgg(v) { const t = Date.parse(v || ''); return isNaN(t) ? 0 : t; }
 // Modalità docente: dopo l'accesso con i PIN (verificati dal server) si riceve un token di sessione.
 // Con il token, scritture e cancellazioni passano dalle funzioni protette docente_* (le uniche che
 // possono toccare corsi, impostazioni, dispositivi e cancellare); senza, valgono le regole dei corsisti.
@@ -325,14 +328,34 @@ const remoteStorageSupabase = {
     // "_" in LIKE vale "un carattere qualsiasi": il filtro del server può restituire qualcosa in più, quindi si rifiltra qui.
     const mappa = {}; const PAGINA = 1000;
     for (let da = 0; ; da += PAGINA) {
-      const res = await fetch(SUPABASE_URL + '/rest/v1/storage?select=key,value&key=like.' + encodeURIComponent(prefix.replace(/\*/g, '') + '*') + '&order=key',
+      const res = await fetch(SUPABASE_URL + '/rest/v1/storage?select=key,value,updated_at&key=like.' + encodeURIComponent(prefix.replace(/\*/g, '') + '*') + '&order=key',
         { headers: _sbHeaders({ Range: da + '-' + (da + PAGINA - 1), 'Range-Unit': 'items' }), cache: 'no-store' });
       await _sbVerifica(res, 'lettura elenco', prefix);
       const righe = await res.json();
-      righe.forEach(r => { if (r.key.indexOf(prefix) === 0) mappa[r.key] = r.value; });
+      righe.forEach(r => { if (r.key.indexOf(prefix) === 0) { mappa[r.key] = r.value; _aggChiave[r.key] = _msAgg(r.updated_at); } });
       if (righe.length < PAGINA) break;
     }
     return mappa;
+  },
+  // Più chiavi precise in una sola richiesta (aggiornamento incrementale della cache). Ritorna { chiave: valore }.
+  async getChiavi(chiavi) {
+    const mappa = {};
+    for (let i = 0; i < chiavi.length; i += 40) {
+      const gruppo = chiavi.slice(i, i + 40);
+      const filtro = 'in.(' + gruppo.map(k => '"' + k.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"').join(',') + ')';
+      const res = await fetch(SUPABASE_URL + '/rest/v1/storage?select=key,value,updated_at&key=' + encodeURIComponent(filtro), { headers: _sbHeaders(), cache: 'no-store' });
+      await _sbVerifica(res, 'lettura chiavi', gruppo[0] + '…');
+      (await res.json()).forEach(r => { mappa[r.key] = r.value; _aggChiave[r.key] = _msAgg(r.updated_at); });
+    }
+    return mappa;
+  },
+  // Aggiunge UN record in coda a un cassetto direttamente sul server (funzione aggiungi_record): si invia solo il
+  // record nuovo, non tutto il cassetto. Ritorna { agg: ms ultima modifica, n: lunghezza del cassetto dopo l'aggiunta }.
+  async appendi(key, record) {
+    const r = await _sbRpc('aggiungi_record', { p_chiave: key, p_record: record });
+    const agg = _msAgg(r && r.agg);
+    _aggChiave[key] = agg;
+    return { agg, n: Number(r && r.n) || 0 };
   },
   async set(key, value) {
     if (_tokenDocente) { await _sbRpc('docente_scrivi', { p_token: _tokenDocente, p_righe: [{ key, value }] }); return; }
@@ -386,12 +409,38 @@ const remoteStorage = USA_SUPABASE ? remoteStorageSupabase : remoteStorageFireba
 // in una volta sola e le teniamo qui; getRaw le legge da qui invece che dalla rete.
 let _cacheCorso = null; // null = non ancora caricata; altrimenti { chiave: valoreStringa }
 let _ultimoScaricoCache = null;
+let _cacheCorsoDi = null; // corso a cui si riferisce la cache
+// Aggiornamento incrementale (solo Supabase): chiede l'elenco delle chiavi con la data di ultima modifica (pochi KB) e
+// scarica di nuovo SOLO le chiavi cambiate, invece di tutto il corso. Con prefisso parziale (es. solo i movimenti)
+// serve ai controlli di disponibilità, che devono vedere anche ciò che hanno registrato gli altri un attimo prima.
+async function aggiornaCacheIncrementale(prefisso) {
+  const elenco = await remoteStorage.chiavi(prefisso);
+  const presenti = new Set(elenco.map(x => x.key));
+  const daScaricare = elenco.filter(x => _cacheCorso[x.key] === undefined || _aggChiave[x.key] !== _msAgg(x.agg)).map(x => x.key);
+  if (daScaricare.length) Object.assign(_cacheCorso, await remoteStorage.getChiavi(daScaricare));
+  Object.keys(_cacheCorso).forEach(k => { if (k.indexOf(prefisso) === 0 && !presenti.has(k)) delete _cacheCorso[k]; });
+  return daScaricare.length;
+}
+async function movimentiFreschi() {
+  if (USA_SUPABASE && _cacheCorso && _cacheCorsoDi === currentCorso) {
+    try { await aggiornaCacheIncrementale('corso_' + currentCorso + '::movimentazioni::'); } catch (e) { /* si usa la cache */ }
+  }
+  return await loadList('movimentazioni');
+}
 async function caricaCacheCorso() {
   if (!STORAGE_CONFIGURATO || !currentCorso) { _cacheCorso = {}; return; }
+  if (USA_SUPABASE && _cacheCorso && _cacheCorsoDi === currentCorso && Object.keys(_cacheCorso).length) {
+    try {
+      await aggiornaCacheIncrementale('corso_' + currentCorso + '::');
+      _ultimoScaricoCache = new Date(); storageOk = true;
+      return;
+    } catch (e) { /* ripiego sul download completo */ }
+  }
   const MAX_TENTATIVI = 3;
   for (let tentativo = 1; tentativo <= MAX_TENTATIVI; tentativo++) {
     try {
       _cacheCorso = await remoteStorage.getPrefix('corso_' + currentCorso + '::');
+      _cacheCorsoDi = currentCorso;
       _ultimoScaricoCache = new Date();
       storageOk = true;
       return;
@@ -933,6 +982,32 @@ async function leggiCassettoFresco(chiave) {
   }
   return await getRaw(chiave, true);
 }
+// Salvataggio "leggero" (Supabase): il server aggiunge il record in coda al cassetto, si invia solo il record nuovo.
+// La copia locale (cache) si aggiorna aggiungendo lo stesso record; se la lunghezza non torna con quella del server
+// (es. un'altra scheda ha aggiunto qualcosa nel frattempo) si rilegge quel cassetto. Ritorna false se non disponibile:
+// in quel caso il chiamante usa il metodo classico (rilettura + riscrittura del cassetto).
+let _appendiDisponibile = true;
+async function _appendiAlCassetto(chiave, record) {
+  if (!USA_SUPABASE || !_appendiDisponibile || !remoteStorage.appendi) return false;
+  let esito = null;
+  for (let tentativo = 1; tentativo <= 3 && !esito; tentativo++) {
+    try { esito = await remoteStorage.appendi(chiave, record); }
+    catch (e) {
+      if (/aggiungi_record|Could not find|PGRST202|404/.test(String(e && e.message))) { _appendiDisponibile = false; return false; }
+      if (tentativo === 3) { _diagScrittureFallite++; _diagRegistraErrore('scrittura', chiave, e); throw new Error('Salvataggio NON riuscito (connessione o server non raggiungibile). Il dato non è stato registrato: riprova tra poco.'); }
+      await attesa(500 * tentativo);
+    }
+  }
+  _diagScrittureOk++; storageOk = true;
+  if (_cacheCorso) {
+    let locale = null;
+    if (_cacheCorso[chiave] !== undefined) { try { locale = JSON.parse(_cacheCorso[chiave]); } catch (e) {} }
+    if (Array.isArray(locale) && locale.length + 1 === esito.n) { locale.push(record); _cacheCorso[chiave] = JSON.stringify(locale); }
+    else if (!Array.isArray(locale) && esito.n === 1) { _cacheCorso[chiave] = JSON.stringify([record]); }
+    else { try { Object.assign(_cacheCorso, await remoteStorage.getChiavi([chiave])); } catch (e) { delete _cacheCorso[chiave]; } }
+  }
+  return true;
+}
 function _erroreSessioneFermata() {
   const e = new Error('Sessione fermata: il nome è in uso su un altro dispositivo.'); e.sessioneFermata = true; return e;
 }
@@ -940,6 +1015,7 @@ async function aggiungiRecord(key, record) {
   if (!(await verificaNomeAncoraMio())) throw _erroreSessioneFermata();
   await registraPartecipante();
   const chiaveCassetto = corsoKey(key) + '::u::' + nomeShard();
+  if (await _appendiAlCassetto(chiaveCassetto, record)) return record;
   // Rilettura dal server + scrittura, ripetute se la scrittura non riesce: il record non va mai perso in silenzio.
   for (let tentativo = 1; tentativo <= 3; tentativo++) {
     const mio = await leggiCassettoFresco(chiaveCassetto);
@@ -960,6 +1036,7 @@ async function applicaPatch(key, valoreChiave, campiDaAggiornare, opzioni = {}) 
   await registraPartecipante();
   const chiaveCassetto = corsoKey(key) + '::patch::' + nomeShard();
   const patch = { _target: valoreChiave, _t: Date.now(), _da: currentUser, campi: campiDaAggiornare, _arrayField: opzioni.arrayField || null, _arrayIndex: opzioni.arrayIndex !== undefined ? opzioni.arrayIndex : null };
+  if (await _appendiAlCassetto(chiaveCassetto, patch)) return true;
   for (let tentativo = 1; tentativo <= 3; tentativo++) {
     const mie = await leggiCassettoFresco(chiaveCassetto);
     mie.push(patch);
@@ -975,14 +1052,25 @@ async function eliminaRecord(key, valoreChiave) {
 }
 
 // La giacenza NON è un numero salvato: si calcola sempre sommando i movimenti (entrate meno uscite).
-function getGiacenzaLoc(materiale, locazione) {
-  let tot = 0;
+// Indice delle giacenze, ricalcolato solo quando cambiano i movimenti (nuovo elenco o movimenti aggiunti):
+// prima ogni cella di MMBE/LS24 riscorreva tutti i movimenti (decine di milioni di passaggi nei corsi grandi).
+let _indiceGiac = null;
+function _indiceGiacenze() {
+  if (_indiceGiac && _indiceGiac.ref === movimentazioni && _indiceGiac.len === movimentazioni.length) return _indiceGiac;
+  const perLoc = new Map(), totale = new Map();
+  const add = (mappa, k, q) => mappa.set(k, (mappa.get(k) || 0) + q);
   movimentazioni.forEach(m => {
-    if (m.materiale !== materiale) return;
-    if (m.locazioneA === locazione) tot += m.quantita;
-    if (m.locazioneDa === locazione) tot -= m.quantita;
+    const q = m.quantita;
+    if (m.locazioneA) add(perLoc, m.materiale + '\u0001' + m.locazioneA, q);
+    if (m.locazioneDa) add(perLoc, m.materiale + '\u0001' + m.locazioneDa, -q);
+    if (m.locazioneA && !m.locazioneDa) add(totale, m.materiale, q);
+    if (m.locazioneDa && !m.locazioneA) add(totale, m.materiale, -q);
   });
-  return tot;
+  _indiceGiac = { ref: movimentazioni, len: movimentazioni.length, perLoc, totale };
+  return _indiceGiac;
+}
+function getGiacenzaLoc(materiale, locazione) {
+  return _indiceGiacenze().perLoc.get(materiale + '\u0001' + locazione) || 0;
 }
 // Ubicazioni in anagrafica + quelle che compaiono nei movimenti ma non sono (più) in anagrafica (es. eliminate
 // dopo averci messo merce): senza queste, LS24 non mostrerebbe quella merce mentre MMBE la conta nel totale.
@@ -993,13 +1081,7 @@ function ubicazioniConMovimenti() {
   return locazioni.concat([...extra].sort().map(c => ({ codice: c, descrizione: '⚠ ubicazione non in anagrafica', fantasma: true })));
 }
 function getGiacenza(codice) {
-  let tot = 0;
-  movimentazioni.forEach(m => {
-    if (m.materiale !== codice) return;
-    if (m.locazioneA && !m.locazioneDa) tot += m.quantita;
-    if (m.locazioneDa && !m.locazioneA) tot -= m.quantita;
-  });
-  return tot;
+  return _indiceGiacenze().totale.get(codice) || 0;
 }
 // `extra` porta campi opzionali che rendono il movimento AUTOSUFFICIENTE per una stampa futura
 // (numeroOrdineRif, fornitore, ddtFornitore, ricevutoDa, ecc.), così la stampa del verbale di
@@ -4743,7 +4825,7 @@ function renderCOOIS(el) {
         erroriMovimenti = erroriMovimenti.filter(x => x.numero !== cogiAperto.numero);
         avviso = ` Rimossa anche la voce COGI ${cogiAperto.numero} (nessun movimento da stornare).`;
       } else if (o.stato === 'confermato') {
-        movimentazioni = await loadList('movimentazioni');
+        movimentazioni = await movimentiFreschi();
         if (o.quantita > getGiacenzaLoc(o.prodotto, 'OFFICINA') && !(await negativoAmmesso(o.prodotto))) {
           confirmDeleteKey = null;
           setStatus(`Annullamento bloccato: il prodotto finito ${o.prodotto} non è più in OFFICINA in quantità sufficiente (${getGiacenzaLoc(o.prodotto, 'OFFICINA')} su ${o.quantita}): stornare la rimozione porterebbe la giacenza sotto zero.`, true);
@@ -4804,7 +4886,7 @@ function renderCO15(el) {
       const numero = btn.dataset.numero;
       const op = ordiniProduzione.find(o => o.numero === numero);
       if (!op) return;
-      movimentazioni = await loadList('movimentazioni');
+      movimentazioni = await movimentiFreschi();
       // Carenze: come in SAP (backflush), se manca materiale la conferma viene salvata ma i movimenti
       // merci NON si registrano e finiscono in COGI (movimenti merci errati), da riprocessare dopo aver
       // caricato il materiale. Fa eccezione il materiale con giacenza negativa ammessa (flag + interruttore).
@@ -4874,7 +4956,7 @@ function renderCO15(el) {
 let filtroCOGI = { mostraElaborati: false };
 let cogiDaEliminare = null; // conferma in pagina (niente confirm() nativo)
 async function riprocessaCOGI(numero) {
-  movimentazioni = await loadList('movimentazioni');
+  movimentazioni = await movimentiFreschi();
   const c = erroriMovimenti.find(x => x.numero === numero);
   if (!c || c.stato !== 'aperto') return { ok: false, msg: `${numero}: voce non trovata o già elaborata.` };
   const carenze = [];
@@ -5505,7 +5587,7 @@ function renderMIGO(el) {
     if (!ddt) { setStatus('Inserisci il numero del DDT del fornitore prima di confermare il ricevimento.', true); return; }
     // dati freschi: un'altra sessione potrebbe aver già ricevuto qualche riga
     ordiniAcquisto = await loadList('ordiniAcquisto');
-    movimentazioni = await loadList('movimentazioni');
+    movimentazioni = await movimentiFreschi();
     const scelte = [];
     for (const o of ordiniAcquisto) {
       if (o.fornitore !== d.fornitore) continue;
@@ -6002,7 +6084,7 @@ function renderMovimentoMateriale(el, trans) {
       if (d.tipoMov === '311' && r.locDa === r.locA) { setStatus(`Riga ${n}: nel movimento 311 le ubicazioni di prelievo e di ricezione devono essere diverse.`, true); return; }
       if (d.tipoMov === '309' && r.materiale === r.materiale2 && r.locDa === r.locA) { setStatus(`Riga ${n}: nel movimento 309 materiale e ubicazione di partenza e destinazione coincidono.`, true); return; }
     }
-    movimentazioni = await loadList('movimentazioni');
+    movimentazioni = await movimentiFreschi();
     const carenze = carenzeMB(d.tipoMov, d.righe);
     const bloccanti = await carenzeBloccanti(carenze);
     if (bloccanti.length) { setStatus(msgCarenza(bloccanti[0]), true); renderScreenContent(); return; }
@@ -6073,7 +6155,7 @@ function renderMBST(el) {
   const st = document.querySelector('.mbst-stampa'); if (st) st.addEventListener('click', () => stampaDocumentoMateriale(st.dataset.doc));
   document.getElementById('mbst-storna').addEventListener('click', () => withGuard(async () => {
     if (!draftMBST.documento) { setStatus('Seleziona il documento materiale da stornare.', true); return; }
-    movimentazioni = await loadList('movimentazioni');
+    movimentazioni = await movimentiFreschi();
     const d = documentiMateriale().find(x => x.numero === draftMBST.documento);
     if (!d) { setStatus('Documento materiale non trovato.', true); return; }
     if (d.stornoDi) { setStatus(`Il documento ${d.numero} è già uno storno e non si può stornare.`, true); return; }
@@ -6128,6 +6210,7 @@ function contropartemovimento(m) {
   return null;
 }
 let sortMov = { campo: null, asc: true };
+let mb51Limite = 500; // righe mostrate (come il "numero massimo di risultati" della selezione SAP)
 function renderMovList(el) {
   const causaliPresenti = [...new Set(movimentazioni.map(m => m.causale))].sort();
   const tipiPresenti = ['Ingresso','Uscita','Produzione','Interna'];
@@ -6189,7 +6272,7 @@ function renderMovList(el) {
       <table>
         <thead><tr>${colonne.map(c => `<th class="mov-sort-th" data-campo="${c.campo}" style="cursor:pointer; user-select:none;" title="Clicca per ordinare">${c.label}${sortMov.campo===c.campo ? (sortMov.asc?' ▲':' ▼') : ''}</th>`).join('')}<th>Stampa</th></tr></thead>
         <tbody>${elenco.length===0 ? `<tr><td colspan="${colonne.length+1}" style="text-align:center;color:#9a9a8f;padding:16px;">Nessuna movimentazione.</td></tr>` :
-          elenco.map(m => {
+          elenco.slice(0, mb51Limite).map(m => {
             // Basta che la causale INIZI con "Ricevimento MIGO" per mostrare il link: non serve più
             // che rispetti l'esatto formato "(numero, DDT ...)" a fine stringa — così un formato
             // leggermente diverso (dati storici, o modifiche future alla causale) non fa più
@@ -6200,7 +6283,10 @@ function renderMovList(el) {
         </tbody>
       </table>
     </div>
+    ${elenco.length > mb51Limite ? `<p style="font-size:11px; color:#5a6470; margin:6px 10px;">Mostrati i primi <strong>${mb51Limite}</strong> movimenti su <strong>${elenco.length}</strong> (i più recenti). Restringi la selezione con i filtri, oppure <span class="print-btn" id="mb51-altri">mostra altri 500</span>. Lo scarico Excel/CSV contiene sempre tutti i movimenti selezionati.</p>` : ''}
   `;
+  const mb51Altri = document.getElementById('mb51-altri');
+  if (mb51Altri) mb51Altri.addEventListener('click', () => { mb51Limite += 500; renderScreenContent(); });
   document.querySelectorAll('.stampa-doc-mb51').forEach(elx => {
     elx.addEventListener('click', () => stampaDocumentoMateriale(elx.dataset.documento));
   });
@@ -6379,6 +6465,7 @@ function renderVL01N(el) {
     if (!draftVL.ordineVendita) { setStatus('Seleziona un ordine di vendita.', true); return; }
     const ordine = ordiniVendita.find(o => o.numero === draftVL.ordineVendita);
     if (!ordine) { setStatus('Ordine non trovato.', true); return; }
+    movimentazioni = await movimentiFreschi();
 
     const righeDaConsegnare = [];
     for (const [idxStr, val] of Object.entries(draftVL.righe)) {
