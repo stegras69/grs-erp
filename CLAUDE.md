@@ -50,8 +50,11 @@ Tabella `public.storage(key text PK, value text, updated_at)`.
   sì). Sblocco dal Pannello docente → Dispositivi → "Sblocca nome". Dispositivi del formatore esenti.
 - **Password del sito** ricordata 12 ore per browser.
 - **Messaggi dal formatore** (come SAP TH_POPUP / SM02): Pannello → Dispositivi → "✉ messaggio" (un dispositivo) o
-  "📢 messaggio al corso". Chiavi `messaggi::<dispositivo>` e `messaggiCorso::<corso>` scritte solo dal docente; i
-  dispositivi controllano ogni 30 s, mostrano ogni messaggio una volta e confermano la lettura nella presenza.
+  "📢 messaggio al corso". Chiavi `messaggi::nome::<corso>::<shard>` (al nome, su qualunque dispositivo; dal 16/10),
+  `messaggi::<dispositivo>` (vecchie, ancora lette) e `messaggiCorso::<corso>`, scritte solo dal docente; i dispositivi
+  controllano ogni 30 s, mostrano ogni messaggio una volta e confermano la lettura nella presenza.
+- **Versione del programma:** `VERSIONE_PROGRAMMA` va nella presenza (`ver`); il Pannello → Dispositivi segna
+  "versione vecchia" chi non ha ricaricato. Aggiornare la costante a ogni pubblicazione.
 - **LS24** mostra anche merce in ubicazioni non più in anagrafica ("⚠ ubicazione non in anagrafica").
 - **Sicurezza server:** i corsisti (chiave anon) scrivono solo `corso_*` (tranne `impostazioni`) e `dispositiviAttivi::*`,
   non cancellano; il docente usa le RPC `docente_*` con token ottenuto da `docente_accesso` (PIN verificati sul server);

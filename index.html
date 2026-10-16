@@ -645,6 +645,7 @@ async function registraPresenzaDispositivo(forza, inAttesa) {
     const rec = { corso: currentCorso, utente: currentUser, ultimoAccesso: nowStr(), ts: Date.now(), browser: _descriviBrowser() };
     if (inAttesa) rec.inAttesa = true; // bloccato perché il nome è già in uso altrove: il formatore lo vede nel pannello
     if (_ultimoMsgLetto) rec.lettoMsg = _ultimoMsgLetto; // conferma di lettura per il Pannello docente
+    rec.ver = VERSIONE_PROGRAMMA; // il Pannello docente segnala chi non ha ricaricato la pagina
     await remoteStorage.set('dispositiviAttivi::' + getDeviceId(), JSON.stringify(rec));
     if (!inAttesa && _nomeAcquisito) await _scriviBloccoNome();
   } catch (e) { /* non grave: la presenza è solo informativa */ }
@@ -658,9 +659,12 @@ async function _controlloPeriodico() {
 }
 // ---- MESSAGGI DAL FORMATORE: come in SAP la funzione TH_POPUP (popup sullo schermo di un singolo utente) e la
 // transazione SM02 (messaggio di sistema per tutti). Li scrive solo il formatore dal Pannello docente: chiavi
-// "messaggi::<dispositivo>" e "messaggiCorso::<corso>", che i corsisti possono leggere ma non scrivere. Ogni messaggio
+// "messaggi::nome::<corso>::<nome>" (al corsista, su qualunque dispositivo lavori), "messaggi::<dispositivo>" (versione
+// precedente, ancora letta) e "messaggiCorso::<corso>", che i corsisti possono leggere ma non scrivere. Ogni messaggio
 // ha un id: il dispositivo lo mostra una volta sola e ricorda quelli già letti.
+const VERSIONE_PROGRAMMA = '2026-10-16';
 const MESSAGGI_OGNI_MS = 30000;
+function _chiaveMsgNome(corso, utente) { return 'messaggi::nome::' + corso + '::' + _shardDi(utente); }
 let _timerMessaggi = null;
 let _ultimoMsgLetto = null;
 function _msgLetti() { try { return JSON.parse(localStorage.getItem('__messaggi_letti__') || '[]'); } catch (e) { return []; } }
@@ -670,7 +674,7 @@ function _segnaMsgLetto(id) {
 async function controllaMessaggi() {
   if (!STORAGE_CONFIGURATO || !currentUser || !currentCorso || _inPannelloDocente || _sessioneBloccata) return;
   if (document.visibilityState !== 'visible' || document.getElementById('msg-docente')) return;
-  const chiavi = ['messaggi::' + getDeviceId(), 'messaggiCorso::' + currentCorso];
+  const chiavi = [_chiaveMsgNome(currentCorso, currentUser), 'messaggi::' + getDeviceId(), 'messaggiCorso::' + currentCorso];
   const mappa = {};
   try {
     if (remoteStorage.getChiavi) Object.assign(mappa, await remoteStorage.getChiavi(chiavi));
@@ -707,7 +711,7 @@ function avviaPresenzaDispositivo() {
   // se nel frattempo il nome è passato a un altro dispositivo.
   if (!window.__ascoltoVisibilita) {
     window.__ascoltoVisibilita = true;
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') _controlloPeriodico(); });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { _controlloPeriodico(); controllaMessaggi(); } });
   }
 }
 
@@ -1969,6 +1973,9 @@ function _htmlDispositivi({ presenze, bannati, fidati, corsi, nomiInUso, messagg
   const mio = getDeviceId();
   const idBannati = new Set(bannati.map(b => b.id));
   const idFidati = new Set(fidati.map(f => f.id));
+  // messaggio da mostrare per una riga: quello al nome (ultimo inviato) oppure quello vecchio al dispositivo
+  const msgDi = (p) => { const n = p.utente ? messaggi['nome::' + p.corso + '::' + _shardDi(p.utente)] : null, d = messaggi[p.id];
+    return [n, d].filter(m => m && (!m.scade || Date.now() < m.scade)).sort((a, b) => String(b.id).localeCompare(String(a.id)))[0] || null; };
   const filtrate = doc.filtroDispositivi ? presenze.filter(p => p.corso === doc.filtroDispositivi) : presenze;
   const stato = (ts) => { const d = Date.now() - ts; return d < 15 * 60000 ? '<span class="doc-pill verde">collegato</span>' : d < 86400000 ? '<span class="doc-pill giallo">oggi</span>' : '<span class="doc-pill grigio">inattivo</span>'; };
   const tag = (id) => (presenze.find(p => p.id === id && p.inAttesa && Date.now() - p.ts < SESSIONE_SCADE_MS) ? ' <span class="doc-pill rosso">nome già in uso</span>' : '') + (id === mio ? ' <span class="doc-pill blu">questo</span>' : '') + (idFidati.has(id) ? ' <span class="doc-pill blu">formatore</span>' : '') + (idBannati.has(id) ? ' <span class="doc-pill rosso">bloccato</span>' : '');
@@ -1990,10 +1997,10 @@ function _htmlDispositivi({ presenze, bannati, fidati, corsi, nomiInUso, messagg
         <tr><th>Stato</th><th>Corso</th><th>Nome</th><th>Browser</th><th>Ultimo segnale</th><th>Dispositivo</th><th></th></tr>
         ${filtrate.map(p => `<tr>
           <td>${stato(p.ts)}</td><td>${_h(p.corso || '—')}</td><td><strong>${_h(p.utente || '—')}</strong></td><td>${_h(p.browser || '—')}</td>
-          <td>${_fmtTempo(p.ts)}</td><td class="doc-sub">${_h(p.id.slice(0, 22))}${tag(p.id)}</td>
+          <td>${_fmtTempo(p.ts)}</td><td class="doc-sub">${_h(p.id.slice(0, 22))}${tag(p.id)}${Date.now() - p.ts < 86400000 && p.ver !== VERSIONE_PROGRAMMA ? ' <span class="doc-pill giallo" title="Deve ricaricare la pagina (Ctrl+F5 / Cmd+Option+R): i messaggi e le correzioni nuove non gli arrivano">versione vecchia</span>' : ''}</td>
           <td class="doc-azioni"><span class="print-btn doc-msg-apri" data-id="${_h(p.id)}">✉ messaggio</span>${p.id === mio || idBannati.has(p.id) ? '' : `<span class="print-btn doc-banna" data-id="${_h(p.id)}" style="color:#a83232;">⛔ blocca</span>`}
-            ${messaggi[p.id] ? `<div class="doc-sub">✉ ${_h(messaggi[p.id].inviato || '')}: ${p.lettoMsg === messaggi[p.id].id ? '<span style="color:#1a6b2e;">letto ✓</span>' : 'non ancora letto'}</div>` : ''}</td></tr>
-          ${doc.msgId === p.id ? `<tr class="doc-dettaglio"><td colspan="7"><p style="margin:0 0 4px 0;">Messaggio sullo schermo di <strong>${_h(p.utente || '—')}</strong> (${_h(p.browser || '')}):</p>${_moduloMessaggio('disp')}</td></tr>` : ''}
+            ${msgDi(p) ? `<div class="doc-sub">✉ ${_h(msgDi(p).inviato || '')}: ${p.lettoMsg === msgDi(p).id ? '<span style="color:#1a6b2e;">letto ✓</span>' : 'non ancora letto'}</div>` : ''}</td></tr>
+          ${doc.msgId === p.id ? `<tr class="doc-dettaglio"><td colspan="7"><p style="margin:0 0 4px 0;">Messaggio sullo schermo di <strong>${_h(p.utente || '—')}</strong> (corso ${_h(p.corso || '')}): arriva su qualunque dispositivo lavori con questo nome.</p>${_moduloMessaggio('disp')}</td></tr>` : ''}
           ${doc.bannaId === p.id ? `<tr class="doc-dettaglio"><td colspan="7"><div class="doc-conferma">
             <p>Bloccare il dispositivo di <strong>${_h(p.utente || '—')}</strong> (${_h(p.browser || '')})?</p>
             <input type="text" id="doc-banna-motivo" placeholder="Motivo (facoltativo, visibile solo a te)" autocomplete="off">
@@ -2266,9 +2273,11 @@ function _collegaPannelloDocente() {
       doc.msgCorsoAperto = false;
       _docMsg(`Messaggio inviato a tutto il corso ${corso}: compare entro 30 secondi.`);
     } else {
-      await remoteStorage.set('messaggi::' + doc.msgId, JSON.stringify({ ...m, scade: Date.now() + 24 * 3600000 }));
+      const dest = (await _leggiPresenze()).find(x => x.id === doc.msgId) || {};
+      const chiave = dest.utente && dest.corso ? _chiaveMsgNome(dest.corso, dest.utente) : 'messaggi::' + doc.msgId;
+      await remoteStorage.set(chiave, JSON.stringify({ ...m, scade: Date.now() + 24 * 3600000 }));
       doc.msgId = null;
-      _docMsg('Messaggio inviato: compare entro 30 secondi sullo schermo del corsista (se ha il programma aperto e ha ricaricato la versione nuova).');
+      _docMsg(`Messaggio inviato${dest.utente ? ' a ' + dest.utente : ''}: compare entro 30 secondi sullo schermo, su qualunque dispositivo lavori con questo nome (se ha ricaricato la versione nuova: vedi "versione vecchia").`);
     }
   }));
   tutti('.doc-msg-ritira', el => _docEsegui(async () => { await remoteStorage.delete(el.dataset.chiave); _docMsg('Messaggio ritirato.'); }));
