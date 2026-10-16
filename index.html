@@ -662,7 +662,7 @@ async function _controlloPeriodico() {
 // "messaggi::nome::<corso>::<nome>" (al corsista, su qualunque dispositivo lavori), "messaggi::<dispositivo>" (versione
 // precedente, ancora letta) e "messaggiCorso::<corso>", che i corsisti possono leggere ma non scrivere. Ogni messaggio
 // ha un id: il dispositivo lo mostra una volta sola e ricorda quelli già letti.
-const VERSIONE_PROGRAMMA = '2026-10-16';
+const VERSIONE_PROGRAMMA = '2026-10-16b';
 const MESSAGGI_OGNI_MS = 30000;
 function _chiaveMsgNome(corso, utente) { return 'messaggi::nome::' + corso + '::' + _shardDi(utente); }
 let _timerMessaggi = null;
@@ -1288,7 +1288,12 @@ let draftCliente = { codice:"", ragioneSociale:"", indirizzo:"", citta:"", piva:
 let draftDistinta = { prodotto:"", componenti:[{codice:"",qta:"1"}] };
 let draftDistintaModifica = { prodotto:"", componenti:[], _originale: null };
 let draftOV = { cliente:"", riferimentoCliente:"", righe:[{prodotto:"", quantita:"1", dataRichiesta:""}] };
-let draftCO01 = { prodotto:"", quantita:"1", dataPianificata:"" };
+let draftCO01 = { prodotto:"", quantita:"1", dataPianificata:"", linea:"" };
+// Linea di un ordine di produzione: quella registrata nell'ordine oppure, per gli ordini creati senza (CO01 prima
+// del 16/10), quella della versione di produzione del prodotto (C223) se è una sola — come in SAP, dove l'ordine
+// prende la linea dalla versione di produzione.
+function lineeDelProdotto(codice) { return [...new Set(assegnazioni.filter(a => a.prodotto === codice).map(a => a.linea))]; }
+function lineaODP(o) { if (o.linea) return o.linea; const l = lineeDelProdotto(o.prodotto); return l.length === 1 ? l[0] : null; }
 let mf50Quantita = {}; // deprecato (usato dalla vecchia UI a riga singola, non più renderizzata)
 let mf50Data = {}; // deprecato
 let mf50Sel = { applicata:false, linee:[], gruppi:[], materiale:'', soloFabbisogno:false, settimane:8, ordina:'linea' };
@@ -3166,7 +3171,7 @@ function stampaOrdineProduzione(numero) {
     <h2 style="margin:0 0 4px 0;">Ordine di Produzione ${o.numero}</h2>
     <p style="margin:0 0 14px 0; color:#666; font-size:12px;">Stato: ${o.stato}${o.stato==='confermato' ? ' — evaso' : ' — da evadere'}</p>
     <p style="margin:2px 0;"><strong>Prodotto:</strong> ${materialeLabel(o.prodotto)} &nbsp;&nbsp; <strong>Quantità:</strong> ${o.quantita}</p>
-    <p style="margin:2px 0;"><strong>Linea di produzione:</strong> ${o.linea || '(non assegnata)'} &nbsp;&nbsp; <strong>Data pianificata:</strong> ${o.dataPianificata || '-'}</p>
+    <p style="margin:2px 0;"><strong>Linea di produzione:</strong> ${lineaODP(o) || '(non assegnata)'} &nbsp;&nbsp; <strong>Data pianificata:</strong> ${o.dataPianificata || '-'}</p>
     <p style="margin:2px 0;"><strong>Origine:</strong> ${o.origine}</p>
     <p style="margin:10px 0 2px 0;"><strong>Creato da:</strong> ${o.creatoDa} il ${o.creatoIl}</p>
     ${o.confermatoDa ? `<p style="margin:2px 0;"><strong>Confermato da:</strong> ${o.confermatoDa} il ${o.confermatoIl}</p>` : ''}
@@ -3586,7 +3591,7 @@ function renderMF50(el) {
     // vecchi dati duplicati), evita di renderizzare più blocchi identici sovrapposti per la
     // stessa linea ("si ammucchiano").
     const lineeChiavi = [...new Set(lineeProduzione.map(l => l.codice))];
-    const haNonAssegnata = ordiniProduzione.some(o => o.stato === 'aperto' && !o.linea && prodottiVisibili.has(o.prodotto));
+    const haNonAssegnata = ordiniProduzione.some(o => o.stato === 'aperto' && !lineaODP(o) && prodottiVisibili.has(o.prodotto));
     if (haNonAssegnata && lineaVisibile(null)) lineeChiavi.push('(non assegnata)');
     for (let i = lineeChiavi.length - 1; i >= 0; i--) if (lineeChiavi[i] !== '(non assegnata)' && !lineaVisibile(lineeChiavi[i])) lineeChiavi.splice(i, 1);
     if (lineeChiavi.length === 0) {
@@ -3598,7 +3603,7 @@ function renderMF50(el) {
     }
 
     const blocchi = lineeChiavi.map(lineaKey => {
-      const ordiniLinea = ordiniProduzione.filter(o => o.stato === 'aperto' && prodottiVisibili.has(o.prodotto) && (o.linea || '(non assegnata)') === lineaKey);
+      const ordiniLinea = ordiniProduzione.filter(o => o.stato === 'aperto' && prodottiVisibili.has(o.prodotto) && (lineaODP(o) || '(non assegnata)') === lineaKey);
       const totalePerBucket = new Array(buckets.length).fill(0);
       const perCodice = {};
       ordiniLinea.forEach(o => {
@@ -3666,7 +3671,7 @@ function renderMF50(el) {
     // (la giacenza lo riflette), quindi non va più contato come "pianificato futuro" qui:
     // altrimenti questa riga mostra un valore che il recap "Totale linea" qui sopra (che conta
     // solo gli ordini aperti) non riflette, disallineando i due totali.
-    ordiniProduzione.filter(o => o.stato === 'aperto' && o.prodotto === codice && (o.linea || null) === (linea || null)).forEach(o => {
+    ordiniProduzione.filter(o => o.stato === 'aperto' && o.prodotto === codice && (lineaODP(o) || null) === (linea || null)).forEach(o => {
       const idx = bucketIndexForDate(o.dataPianificata, buckets);
       if (idx !== null) arr[idx] += o.quantita;
     });
@@ -4759,7 +4764,11 @@ function renderCO01(el) {
       <div class="formgrid">
         <label>Prodotto finito</label>
         ${campoF4HTML('f-prodotto', draftCO01.prodotto ? materialeLabel(draftCO01.prodotto) : '', '-- cerca prodotto finito (F4) --')}
+        <label>Linea (versione di produzione)</label>
+        <select id="f-linea-co01">${(() => { const ass = draftCO01.prodotto ? lineeDelProdotto(draftCO01.prodotto) : []; const tutte = [...new Set([...ass, ...lineeProduzione.map(l => l.codice)])];
+          const sel = draftCO01.linea || ass[0] || ''; return `<option value="" ${sel ? '' : 'selected'}>-- nessuna linea --</option>` + tutte.map(l => `<option value="${_h(l)}" ${l === sel ? 'selected' : ''}>${_h(l)}${ass.includes(l) ? ' (C223)' : ''}</option>`).join(''); })()}</select>
       </div>
+      ${draftCO01.prodotto && !lineeDelProdotto(draftCO01.prodotto).length ? '<p style="font-size:11px;color:#a86a1a;margin-top:6px;">Il prodotto non ha una versione di produzione: assegnalo a una linea in C223 (o scegli la linea qui).</p>' : ''}
       ${prodottiFiniti.length===0 ? '<p style="font-size:11px;color:#a83232;margin-top:8px;">Nessun prodotto finito con distinta base associata. Crea prima la BOM in CS01.</p>' : ''}
       ` : `
       <div class="formgrid">
@@ -4771,11 +4780,13 @@ function renderCO01(el) {
     </div>
   `;
   collegaF4('f-prodotto', 'Cerca prodotto finito', prodottiFiniti.map(p => ({ value: p.codice, label: materialeLabel(p.codice) })), (valore) => {
-    draftCO01.prodotto = valore;
+    draftCO01.prodotto = valore; draftCO01.linea = '';
     renderScreenContent();
   });
   const campoQta = document.getElementById('f-qta');
   if (campoQta) campoQta.addEventListener('input', e => draftCO01.quantita = e.target.value);
+  const campoLineaCO01 = document.getElementById('f-linea-co01');
+  if (campoLineaCO01) campoLineaCO01.addEventListener('change', e => draftCO01.linea = e.target.value);
   const campoDataPian = document.getElementById('f-dataPian');
   if (campoDataPian) campoDataPian.addEventListener('input', e => draftCO01.dataPianificata = e.target.value);
   attachSapTabsListeners(tab => { co01TabAttivo = tab; renderScreenContent(); });
@@ -4787,13 +4798,13 @@ function renderCO01(el) {
     ordiniProduzione = await loadList('ordiniProduzione');
     const rec = {
       numero: await prossimoNumero('OP'), prodotto: draftCO01.prodotto, quantita: qta, origine: 'Manuale (CO01)', stato: 'aperto',
-      dataPianificata: draftCO01.dataPianificata,
+      dataPianificata: draftCO01.dataPianificata, linea: draftCO01.linea || lineeDelProdotto(draftCO01.prodotto)[0] || null,
       componenti: bom.componenti.map(c => ({ codice: c.codice, qtaUnitaria: Number(c.qta), qtaTotale: Number(c.qta) * qta })),
       creatoDa: currentUser, creatoIl: nowStr(), confermatoDa: null, confermatoIl: null,
     };
     await aggiungiRecord('ordiniProduzione', rec);
     ordiniProduzione.push(rec);
-    draftCO01 = { prodotto:"", quantita:"1", dataPianificata:"" };
+    draftCO01 = { prodotto:"", quantita:"1", dataPianificata:"", linea:"" };
     co01TabAttivo = 'generali';
     setStatus(`Ordine di produzione ${rec.numero} creato manualmente.`);
     renderMain();
@@ -4844,7 +4855,7 @@ function renderCOOIS(el) {
           ${elenco.length===0 ? `<tr><td colspan="12" style="text-align:center;color:#9a9a8f;padding:16px;">${mostraEvasiCOOIS ? 'Nessun ordine di produzione.' : 'Nessun ordine di produzione aperto. Spunta sopra per vedere anche quelli già evasi.'}</td></tr>` :
             elenco.map(o => `
               <tr>
-                <td>${o.numero}</td><td>${materialeLabel(o.prodotto)}</td><td>${o.quantita}</td><td>${o.linea || '-'}</td><td>${o.dataPianificata || '-'}</td><td>${o.origine}</td>
+                <td>${o.numero}</td><td>${materialeLabel(o.prodotto)}</td><td>${o.quantita}</td><td>${lineaODP(o) || '-'}</td><td>${o.dataPianificata || '-'}</td><td>${o.origine}</td>
                 <td>${semaforoStatoOrdine(o.stato)}</td>
                 <td>${o.creatoDa}</td><td>${o.confermatoDa || '-'}</td><td>${o.dataEvasione || '-'}</td>
                 <td><span class="print-btn stampa-op" data-numero="${o.numero}">🖶 stampa</span></td>
