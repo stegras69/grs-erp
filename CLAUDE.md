@@ -48,7 +48,8 @@ Tabella `public.storage(key text PK, value text, updated_at)`.
   dopo; prima di quella data vale la regola vecchia (primo record), così ciò che si vedeva non cambia.
 - **Un nome, un dispositivo:** lo stesso nome non lavora da due browser/dispositivi insieme (schede dello stesso browser
   sì). Sblocco dal Pannello docente → Dispositivi → "Sblocca nome". Dispositivi del formatore esenti.
-- **Password del sito** ricordata 12 ore per browser.
+- **Password del sito** ricordata 12 ore per browser. Nel codice c'è solo l'impronta SHA-256 (`SITE_ACCESS_HASH`), mai la
+  password in chiaro (cambiata l'1/11/2026; la conosce Stefano).
 - **Messaggi dal formatore** (come SAP TH_POPUP / SM02): Pannello → Dispositivi → "✉ messaggio" (un dispositivo) o
   "📢 messaggio al corso". Chiavi `messaggi::nome::<corso>::<shard>` (al nome, su qualunque dispositivo; dal 16/10),
   `messaggi::<dispositivo>` (vecchie, ancora lette) e `messaggiCorso::<corso>`, scritte solo dal docente; i dispositivi
