@@ -1,0 +1,34 @@
+# Segnale di vita per il database Supabase del gestionale.
+# Nel piano gratuito Supabase mette in pausa il progetto dopo circa una settimana senza attività
+# (successo il 12/11/2026 dopo la pausa dei corsi dal 19/10). Ogni 3 giorni questa azione fa una
+# lettura di una riga con la chiave pubblica già presente in index.html (stessi permessi dei corsisti,
+# nessuna scrittura). Se la lettura fallisce, l'azione fallisce e GitHub manda un'email al proprietario.
+name: Segnale di vita database
+
+on:
+  schedule:
+    - cron: '17 6 */3 * *'   # alle 06:17 UTC ogni 3 giorni
+  workflow_dispatch: {}      # avvio manuale dalla scheda Actions
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lettura di prova dal database
+        run: |
+          URL=$(grep -oP "const SUPABASE_URL = '\K[^']+" index.html)
+          KEY=$(grep -oP "const SUPABASE_KEY = '\K[^']+" index.html)
+          test -n "$URL" && test -n "$KEY" || { echo "URL o chiave non trovati in index.html"; exit 1; }
+          CODE=$(curl -s -o risposta.json -w '%{http_code}' \
+            -H "apikey: $KEY" -H "Authorization: Bearer $KEY" \
+            "$URL/rest/v1/storage?select=key&limit=1")
+          echo "Risposta HTTP: $CODE"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::Il database non risponde (HTTP $CODE): forse è in pausa. Riattivalo da supabase.com (progetto grs erp)."
+            exit 1
+          fi
+          echo "Database attivo."

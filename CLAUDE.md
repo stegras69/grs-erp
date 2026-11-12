@@ -21,6 +21,8 @@ Simulatore ERP in stile SAP usato da Stefano (formatore) nei corsi. Lingua: **it
 - `index4.html`, `index5.html`: vecchie versioni Firebase, non usate.
 - Backend: **Supabase** (progetto "grs erp", ref `zpnwqybvsowzqycesnlc`). Firebase congelato come copia.
 - `supabase/sicurezza.sql`: protezione lato server **già applicata** (vedi sotto).
+- `.github/workflows/segnale-di-vita.yml`: ogni 3 giorni una lettura dal database, perché nel piano gratuito Supabase
+  mette in pausa il progetto dopo ~7 giorni senza attività (successo il 12/11/2026). Se fallisce, GitHub manda un'email.
 - Non caricare mai versioni locali vecchie (es. `supabase-prova.html`, commit `3dc6734` del branch `sap-like`) al posto
   di `index.html`: cancellerebbero pannello docente, sicurezza e correzioni successive.
 
