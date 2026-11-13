@@ -20,6 +20,9 @@ Simulatore ERP in stile SAP usato da Stefano (formatore) nei corsi. Lingua: **it
 - Un solo file: `index.html` → GitHub Pages https://stegras69.github.io/grs-erp/ (branch `main`).
 - `index4.html`, `index5.html`: vecchie versioni Firebase, non usate.
 - Backend: **Supabase** (progetto "grs erp", ref `zpnwqybvsowzqycesnlc`). Firebase congelato come copia.
+- Accesso al DB dalle sessioni cloud: (1) connettore Supabase (execute_sql, permessi pieni) — il 13/11 non si collegava (502);
+  (2) ambiente cloud **grs-erp**, che consente l'host `zpnwqybvsowzqycesnlc.supabase.co`: REST con la chiave pubblica di
+  index.html (permessi da corsista: lettura, RPC `aggiungi_record` per record/patch SG, niente cancellazioni né storico).
 - `supabase/sicurezza.sql`: protezione lato server **già applicata** (vedi sotto).
 - `.github/workflows/segnale-di-vita.yml`: ogni 3 giorni una lettura dal database, perché nel piano gratuito Supabase
   mette in pausa il progetto dopo ~7 giorni senza attività (successo il 12/11/2026). Se fallisce, GitHub manda un'email.
@@ -88,6 +91,17 @@ precedenti), Diagnostica.
   Da decidere: prodotto (consigliato: un prodotto "da esercizio" identico per ciascuno), dati imposti (consigliato),
   guida rigida o morbida, attivazione per corso (consigliato: solo PISTOIALOG), progresso visibile nel Pannello docente.
   Primo prototipo previsto: motore + passi 1–2.
+
+## Stato al 13/11/2026
+- Corsi: PRATOMAG, ADRIANOLOG, PISTOIALOG (fermo dal 30/09), SANGIOVANNILOG (fermo dal 13/10), **LOGISTICAMARMORA** (nuovo,
+  dal 12/11: Iree, Bizzi, Ali jebali, Kiko, Gosti S.p.A, Ginevra, SG). PROVA e LIVLOG cancellati il 12/11 (nello storico 30 gg).
+- 12/11: DB riattivato dopo la pausa automatica di Supabase; password del sito e PIN del Pannello cambiati (li sa Stefano).
+- LOGISTICAMARMORA, modifiche SG: D02/D03/D04 di Ali jebali da PF a MP (12/11); cliente 44990 di Ginevra sostituito da C07
+  (creato da SG con creatoDa "Ginevra", 44990 eliminato; copie `corso_BACKUP-LOGISTICAMARMORA-1211/1311::*`).
+  Da sistemare se Stefano vuole: clienti con codici doppi/minuscoli (C01 due volte, c04, c05, c06).
+- CO01 propone la linea dalla versione di produzione (C223); MF50 mostra anche gli ordini CO01 senza linea (dal 16/10).
+- Esercizi preparati per Stefano (file non nel repo): FIFO/costi, giacenze e prezzi, proiezione materiali e tetto di
+  magazzino, caso ADRIANOLOG (prefissi AD-/TY-/MO-/DV-), prodotti costruibili. Le soluzioni si rigenerano dai dati del DB.
 
 ## Esercitazione in corso (PRATOMAG, dal 15/10/2026)
 Ordini OV-0065…OV-0075 inseriti da SG con riferimento "ESERCIZIO 15/10 – <corsista>" (Davide, FLINT, modou, Tayeba):
