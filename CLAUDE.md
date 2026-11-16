@@ -67,6 +67,9 @@ Tabella `public.storage(key text PK, value text, updated_at)`.
   ogni valore cancellato/ridotto finisce in `storage_storico` per 30 giorni (Pannello → Sicurezza).
 - MRP: MD02 = ordini di vendita aperti − (giacenza + ODP aperti) poi esplosione; MD01/MD03 dagli ODP aperti;
   dimensionamento lotto: politica → lotto minimo → arrotondamento → lotto massimo (FX ignora gli altri).
+- **MMAM** (dal 16/11, come SAP): cambio tipo materiale PF↔MP; rifiuta il cambio se ci sono documenti aperti
+  (OV non evasi, ODP aperti come prodotto o componente, RA aperte, ODA non ricevuti), controllati sui dati freschi del
+  server; giacenza/movimenti non bloccano; le distinte che lo usano sono solo elencate. MM02 non cambia il tipo (come SAP).
 - Rettifiche: MB1A 702 (quantità da togliere), MB1C 701 (da aggiungere), MB1C 561, storno MBST.
 
 ## Pannello docente
@@ -91,6 +94,15 @@ precedenti), Diagnostica.
   Da decidere: prodotto (consigliato: un prodotto "da esercizio" identico per ciascuno), dati imposti (consigliato),
   guida rigida o morbida, attivazione per corso (consigliato: solo PISTOIALOG), progresso visibile nel Pannello docente.
   Primo prototipo previsto: motore + passi 1–2.
+
+## Stato al 16/11/2026
+- 16/11: connettore Supabase tornato dopo il guasto di claude.ai del 13/11. Nell'ambiente grs-erp è salvato un "network
+  secret" (intestazione `apikey`) con una chiave sbagliata (Supabase risponde "Invalid API key"): rompe le chiamate REST
+  dalla sessione (non il sito). Stefano può toglierlo (ambiente → Modifica → Network secrets) o sostituirlo con la service_role.
+- 16/11: Pannello → Dispositivi: dopo "Sblocca nome" la riga in attesa diventa "sbloccato" (prima restava uguale e sembrava
+  non funzionare; lo sblocco funzionava). Il corsista deve comunque premere Riprova sul dispositivo nuovo.
+- LOGISTICAMARMORA 16/11: I21 "custodia dvd" di Lorenzo da MP a PF con patch SG (copia `corso_BACKUP-LOGISTICAMARMORA-1611::*`).
+  Nuovi corsisti visti: Lorenzo, Maria Flores. Un nome "sessione" del 12/11 sembra la password del sito digitata come nome.
 
 ## Stato al 13/11/2026
 - Corsi: PRATOMAG, ADRIANOLOG, PISTOIALOG (fermo dal 30/09), SANGIOVANNILOG (fermo dal 13/10), **LOGISTICAMARMORA** (nuovo,

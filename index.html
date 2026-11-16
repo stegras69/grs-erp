@@ -662,7 +662,7 @@ async function _controlloPeriodico() {
 // "messaggi::nome::<corso>::<nome>" (al corsista, su qualunque dispositivo lavori), "messaggi::<dispositivo>" (versione
 // precedente, ancora letta) e "messaggiCorso::<corso>", che i corsisti possono leggere ma non scrivere. Ogni messaggio
 // ha un id: il dispositivo lo mostra una volta sola e ricorda quelli già letti.
-const VERSIONE_PROGRAMMA = '2026-11-01';
+const VERSIONE_PROGRAMMA = '2026-11-16';
 const MESSAGGI_OGNI_MS = 30000;
 function _chiaveMsgNome(corso, utente) { return 'messaggi::nome::' + corso + '::' + _shardDi(utente); }
 let _timerMessaggi = null;
