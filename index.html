@@ -1332,6 +1332,7 @@ const MENU = [
       { label: "Anagrafica Materiale", active: true, children: [
         { label: "MM01 - Crea materiale", active: true, screen:"MM01" },
         { label: "MM02 - Modifica materiale (scorte)", active: true, screen:"MM02" },
+        { label: "MMAM - Modifica tipo materiale (PF/MP)", active: true, screen:"MMAM" },
         { label: "MM03 - Elenco/visualizza materiali", active: true, screen:"MM03" },
       ]},
       { label: "Anagrafica Fornitore", active: true, children: [
@@ -2623,6 +2624,7 @@ function renderMain() {
     easy: "SAP Easy Access — Menu utente",
     MM01: "MM01: Crea materiale",
     MM02: "MM02: Modifica materiale",
+    MMAM: "MMAM: Modifica tipo materiale",
     MM03: "MM03: Elenco materiali",
     XK01: "XK01: Crea fornitore",
     XD01: "XD01: Crea cliente",
@@ -2763,6 +2765,7 @@ function renderScreenContent() {
   if (screen === 'easy') renderCruscotto(el);
   else if (screen === 'MM01') renderMM01(el);
   else if (screen === 'MM02') renderMM02(el);
+  else if (screen === 'MMAM') renderMMAM(el);
   else if (screen === 'MM03') renderMM03(el);
   else if (screen === 'XK01') renderXK01(el);
   else if (screen === 'XD01') renderXD01(el);
@@ -6845,6 +6848,90 @@ function renderMM02(el) {
     await applicaPatch('materiali', draftMM02.codiceSelezionato, nuoviValori);
     Object.assign(mat, nuoviValori);
     setStatus(`Materiale ${draftMM02.codiceSelezionato} aggiornato.`);
+    renderMain();
+  }));
+}
+
+// ============ MMAM (modifica tipo materiale) ============
+// Come la transazione SAP MMAM (Change Material Type): si indica il materiale e il nuovo tipo; il sistema
+// controlla se il cambio è possibile e, se non lo è, dà un errore e non salva (in SAP non c'è "procedi comunque").
+// Nel simulatore PF e MP gestiscono la giacenza allo stesso modo, quindi giacenza e movimenti non bloccano;
+// bloccano i documenti aperti che il nuovo tipo gestirebbe diversamente: ordini di vendita, ordini di produzione
+// (come prodotto o come componente), richieste e ordini d'acquisto. Le distinte in cui compare sono solo elencate.
+let draftMMAM = { codiceSelezionato: '', nuovoTipo: '' };
+const TIPI_MATERIALE = [['PF', 'PF - Prodotto finito'], ['MP', 'MP - Materia prima']];
+function tipoMaterialeLabel(t) { return t === 'MP' ? 'MP - Materia prima' : 'PF - Prodotto finito'; }
+async function _elencoFresco(tipo) {
+  if (USA_SUPABASE && _cacheCorso && _cacheCorsoDi === currentCorso) {
+    try { await aggiornaCacheIncrementale('corso_' + currentCorso + '::' + tipo + '::'); } catch (e) { /* si usa la cache */ }
+  }
+  return await loadList(tipo);
+}
+// Documenti aperti che impediscono il cambio di tipo (stessi criteri di MD02/MD04/COOIS/ME5A).
+function bloccantiCambioTipo(codice, { ov, odp, ra, oa }) {
+  const out = [];
+  ov.filter(o => o.stato !== 'evaso' && (o.righe || []).some(r => r.prodotto === codice && !r._rimossa))
+    .forEach(o => out.push(`ordine di vendita ${o.numero} (aperto, di ${o.creatoDa || '?'})`));
+  odp.filter(o => o.stato === 'aperto' && o.prodotto === codice)
+    .forEach(o => out.push(`ordine di produzione ${o.numero} (aperto, prodotto, di ${o.creatoDa || '?'})`));
+  odp.filter(o => o.stato === 'aperto' && o.prodotto !== codice && (o.componenti || []).some(c => c.codice === codice))
+    .forEach(o => out.push(`ordine di produzione ${o.numero} (aperto, componente, di ${o.creatoDa || '?'})`));
+  ra.filter(r => r.stato === 'aperta' && r.materiale === codice)
+    .forEach(r => out.push(`richiesta d'acquisto ${r.numero} (aperta, di ${r.creatoDa || '?'})`));
+  oa.filter(o => (o.righe || []).some(r => r.materiale === codice && !r._rimossa && !rigaCompleta(r)))
+    .forEach(o => out.push(`ordine d'acquisto ${o.numero} (non ancora ricevuto, di ${o.creatoDa || '?'})`));
+  return out;
+}
+function renderMMAM(el) {
+  const mat = materiali.find(m => m.codice === draftMMAM.codiceSelezionato);
+  const inDistinte = mat ? distinte.filter(d => d.prodotto === mat.codice || (d.componenti || []).some(c => c.codice === mat.codice)) : [];
+  const nuoviTipi = mat ? TIPI_MATERIALE.filter(([v]) => v !== (mat.tipo === 'MP' ? 'MP' : 'PF')) : [];
+  if (mat && !nuoviTipi.some(([v]) => v === draftMMAM.nuovoTipo)) draftMMAM.nuovoTipo = nuoviTipi[0][0];
+  el.innerHTML = `
+    <div class="formwrap" style="padding-bottom:0;">
+      <p style="font-size:11px;color:#5a6470;margin:0 0 8px 0;">Cambia il tipo di un materiale già esistente (prodotto finito ↔ materia prima), come la transazione SAP MMAM. Il sistema verifica che il materiale non abbia documenti aperti (ordini di vendita, ordini di produzione, richieste e ordini d'acquisto): se ce ne sono il cambio non è possibile finché non vengono chiusi o eliminati. Giacenza e movimenti già registrati restano invariati.</p>
+    </div>
+    <div class="actionrow"><button class="actionbtn" id="save-mmam">✔ Esegui</button></div>
+    <div class="formwrap">
+      <div class="formgrid">
+        <label>Materiale</label>
+        ${campoF4HTML('f-materiale-mmam', mat ? materialeLabel(mat.codice) : '', '-- cerca materiale (F4) --')}
+      </div>
+      ${mat ? `
+        <div class="formgrid" style="margin-top:10px;">
+          <label>Tipo materiale attuale</label><input type="text" value="${_h(tipoMaterialeLabel(mat.tipo))}" disabled>
+          <label>Nuovo tipo materiale</label>
+          <select id="f-nuovotipo-mmam">${nuoviTipi.map(([v, l]) => `<option value="${v}" ${draftMMAM.nuovoTipo === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        </div>
+        <p style="font-size:10.5px; color:#8a8a80; margin-top:8px;">Giacenza attuale: <strong>${getGiacenza(mat.codice)}</strong> ${_h(mat.um || '')}</p>
+        ${inDistinte.length ? `<p style="font-size:11px; color:#5a6470; margin-top:6px;">ℹ Il materiale compare nelle distinte base: ${inDistinte.map(d => `<strong>${_h(d.prodotto)}</strong>${d.prodotto === mat.codice ? ' (prodotto)' : ' (componente)'}`).join(', ')}. Dopo il cambio verifica se vanno corrette (CS02).</p>` : ''}
+      ` : ''}
+    </div>
+  `;
+  collegaF4('f-materiale-mmam', 'Cerca materiale', materiali.map(m => ({ value: m.codice, label: materialeLabel(m.codice) })), (valore) => {
+    draftMMAM = { codiceSelezionato: valore, nuovoTipo: '' };
+    renderScreenContent();
+  });
+  if (mat) document.getElementById('f-nuovotipo-mmam').addEventListener('change', e => draftMMAM.nuovoTipo = e.target.value);
+  document.getElementById('save-mmam').addEventListener('click', () => withGuard(async () => {
+    if (!draftMMAM.codiceSelezionato || !mat) { setStatus('Seleziona un materiale.', true); return; }
+    const codice = mat.codice, nuovo = draftMMAM.nuovoTipo;
+    if (!nuovo || nuovo === mat.tipo) { setStatus('Scegli un tipo materiale diverso da quello attuale.', true); return; }
+    // Controllo sui dati di tutti aggiornati dal server, non solo sulla copia di questa scheda.
+    setStatus('Verifica dei documenti aperti…');
+    const [ov, odp, ra, oa] = await Promise.all(['ordiniVendita', 'ordiniProduzione', 'richiesteAcquisto', 'ordiniAcquisto'].map(_elencoFresco));
+    const bloccanti = bloccantiCambioTipo(codice, { ov, odp, ra, oa });
+    if (bloccanti.length) {
+      setStatus(`Tipo materiale di ${codice} non modificabile: esistono documenti aperti — ${bloccanti.join('; ')}. Chiudili o eliminali e riprova.`, true);
+      return;
+    }
+    const vecchio = mat.tipo;
+    if (!(await applicaPatch('materiali', codice, { tipo: nuovo }))) {
+      setStatus(`⚠️ Tipo materiale di ${codice} NON salvato: connessione al server condiviso fallita. Riprova tra poco.`, true); return;
+    }
+    mat.tipo = nuovo;
+    draftMMAM = { codiceSelezionato: codice, nuovoTipo: '' };
+    setStatus(`Tipo materiale di ${codice} modificato: ${tipoMaterialeLabel(vecchio)} → ${tipoMaterialeLabel(nuovo)}.`);
     renderMain();
   }));
 }
