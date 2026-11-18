@@ -85,6 +85,9 @@ precedenti), Diagnostica.
 - Elenco ordini di vendita tipo VA05 (oggi l'elenco è sotto VA01).
 - MI01/MI04/MI07 (inventario fisico SAP) al posto delle sole rettifiche 701/702.
 - Controllo al salvataggio dei movimenti verso ubicazioni eliminate.
+- **LOGISTICAMARMORA, RA di Gosti S.p.A (18/11):** MD01 senza materiale lanciato due volte (15:54 e 15:55) → 313 RA
+  (RA-0011…RA-0328), 241 su materiali di altri (Bizzi, Iree, Maria Flores, SG, Ali jebali). Stefano: lasciare così per ora;
+  opzione proposta: eliminare come SG (con copia) le 241 sui materiali altrui.
 - Opzionali: quantità modificabile in ME21N, backup automatico periodico.
 - **Esercitazione guidata** (tipo SAP Enable Now / Fiori guided tours), proposta del 15/10, da riprendere: overlay che
   scurisce lo schermo e illumina con freccia e fumetto la voce di menu e poi campo per campo; il passo avanza solo quando
